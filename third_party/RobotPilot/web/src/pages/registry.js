@@ -9,9 +9,7 @@ const EventsPage = lazy(() => import("./EventsPage"));
 const LogsPage = lazy(() => import("./LogsPage"));
 const MapsPage = lazy(() => import("./MapsPage"));
 const BmsPage = lazy(() => import("./BmsPage"));
-const InspectionPage = lazy(() => import("./InspectionPage"));
 const AssetsPage = lazy(() => import("./AssetsPage"));
-const WaypointActionsPage = lazy(() => import("./WaypointActionsPage"));
 
 /**
  * 所有顶层页面的唯一数据源。Header.jsx 的侧边栏/移动端导航和 pages/index.jsx 的路由都读取此数组，
@@ -24,7 +22,7 @@ export const PAGE_REGISTRY = [
   { path: "/", label: "Cockpit", icon: "map", component: MapPage },
   {
     path: "/route",
-    label: "Task planning",
+    label: "巡检任务规划",
     icon: "route",
     component: RoutePage,
   },
@@ -32,9 +30,7 @@ export const PAGE_REGISTRY = [
   { path: "/info", label: "Status", icon: "status", component: InfoPage },
   { path: "/health", label: "Health", icon: "health", component: HealthPage },
   { path: "/events", label: "Events", icon: "events", component: EventsPage },
-  { path: "/inspection", label: "Inspection", icon: "events", component: InspectionPage },
   { path: "/assets", label: "Assets", icon: "devices", component: AssetsPage },
-  { path: "/waypoint-actions", label: "Waypoint actions", icon: "route", component: WaypointActionsPage },
   { path: "/logs", label: "Logs", icon: "logs", component: LogsPage },
   {
     path: "/bms",
