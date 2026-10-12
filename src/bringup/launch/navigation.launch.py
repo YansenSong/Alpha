@@ -84,6 +84,7 @@ def generate_launch_description():
                output='screen', parameters=[{
                    'use_sim_time': LaunchConfiguration('use_sim_time'),
                    'area_rules_required': True,
+                   'rules_hold_required': True,
                }])
     nav_status = Node(
         package='nav_status', executable='nav_status_node', name='nav_status_node',

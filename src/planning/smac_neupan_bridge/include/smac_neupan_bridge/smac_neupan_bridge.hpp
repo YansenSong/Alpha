@@ -24,9 +24,11 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -51,6 +53,14 @@ private:
     const GoalHandle::WrappedResult & wrapped_result);
   void publishRemainingDistance();
   void publishPlanningStatus(const std::string & status);
+  void onRules(const std_msgs::msg::String::SharedPtr msg);
+  void onMask(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+  void onCostmap(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+  void onPathInstalled(const std_msgs::msg::String::SharedPtr msg);
+  void checkRules();
+  void planToSavedGoal();
+  bool pathBlocked(const nav_msgs::msg::Path & path) const;
+  bool costmapApplied() const;
 
   geometry_msgs::msg::PoseStamped transformGoal(
     const geometry_msgs::msg::PoseStamped & goal) const;
@@ -73,11 +83,18 @@ private:
   double action_server_wait_timeout_{2.0};
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr rules_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr path_installed_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mask_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr rules_hold_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr rules_status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr execution_path_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr remaining_distance_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr planning_status_pub_;
   rclcpp::TimerBase::SharedPtr remaining_distance_timer_;
+  rclcpp::TimerBase::SharedPtr rules_timer_;
   ActionClient::SharedPtr action_client_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -86,6 +103,23 @@ private:
   std::uint64_t goal_generation_{0};
   GoalHandle::SharedPtr active_goal_handle_;
   nav_msgs::msg::Path active_path_;
+  nav_msgs::msg::OccupancyGrid mask_;
+  nav_msgs::msg::OccupancyGrid costmap_;
+  geometry_msgs::msg::PoseStamped saved_goal_;
+  std::string rules_map_key_, rules_map_id_, rules_map_version_id_;
+  std::uint64_t rules_version_{0}, mask_generation_{0};
+  std::uint64_t planning_rules_version_{0}, planning_mask_generation_{0};
+  std::int32_t expected_mask_sec_{-1};
+  std::uint32_t expected_mask_nanosec_{0};
+  bool rules_ready_{false}, have_rules_{false}, have_mask_{false}, have_costmap_{false};
+  bool have_goal_{false}, planning_{false}, waiting_install_{false}, path_installed_{false};
+  bool rules_hold_{true};
+  bool map_requires_new_goal_{false};
+  bool costmap_verified_{false};
+  rclcpp::Time mask_received_at_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time rules_received_at_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time costmap_received_at_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time next_replan_at_{0, 0, RCL_ROS_TIME};
 };
 
 }  // namespace smac_neupan_bridge

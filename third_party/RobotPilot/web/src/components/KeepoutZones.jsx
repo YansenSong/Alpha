@@ -50,6 +50,8 @@ export const KeepoutZonesEditor = ({
   permissionReason,
 }) => {
   const [form, setForm] = useState(EMPTY);
+  const [preview, setPreview] = useState(null);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [legacy] = useState(readLegacy);
   const set = (field) => (event) =>
     setForm((old) => ({ ...old, [field]: event.target.value }));
@@ -80,7 +82,7 @@ export const KeepoutZonesEditor = ({
       (Number.isFinite(Number(form.limit_mps)) &&
         Number(form.limit_mps) > 0)) &&
     (form.type !== "closure" ||
-      (Number.isFinite(Number(form.minutes)) && Number(form.minutes) > 0));
+      (Number.isFinite(Number(form.minutes)) && Number(form.minutes) > 0 && Number(form.minutes) <= 1440));
 
   const add = () => {
     if (!valid) return;
@@ -96,11 +98,9 @@ export const KeepoutZonesEditor = ({
     });
     if (form.type === "speed") rule.limit_mps = Number(form.limit_mps);
     if (form.type === "closure") {
-      rule.expires_at = new Date(
-        Date.now() + Number(form.minutes) * 60000,
-      ).toISOString();
+      rule.duration_seconds = Number(form.minutes) * 60;
     }
-    upsertRule(rule);
+    setPreview(rule);
   };
 
   const legacyMissing = legacy.filter(
@@ -152,7 +152,7 @@ export const KeepoutZonesEditor = ({
                   : "长期有效"}
               </span>
               <button
-                onClick={() => deleteRule(rule.id)}
+                onClick={() => setDeleteCandidate(rule)}
                 disabled={!ready || !canEdit}
                 aria-label={`删除 ${rule.name || rule.id}`}
                 className="text-statusRed disabled:opacity-40"
@@ -161,6 +161,15 @@ export const KeepoutZonesEditor = ({
               </button>
             </div>
           ))}
+        </div>
+      )}
+      {deleteCandidate && (
+        <div className="rounded-lg border border-statusRed/50 p-2 text-statusRed">
+          <p>确认删除 {deleteCandidate.name || deleteCandidate.id}？当前导航路径可能需要重新规划。</p>
+          <button className="mr-3 underline" onClick={() => {
+            if (deleteRule(deleteCandidate.id)) setDeleteCandidate(null);
+          }}>确认删除</button>
+          <button className="underline" onClick={() => setDeleteCandidate(null)}>取消</button>
         </div>
       )}
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
@@ -201,8 +210,22 @@ export const KeepoutZonesEditor = ({
         disabled={!ready || !valid || !canEdit}
         className="self-start rounded-lg border border-themeBlue px-3 py-1 text-themeBlue hover:bg-themeBlue hover:text-white disabled:opacity-40"
       >
-        添加规则
+        预览规则
       </button>
+      {preview && (
+        <div className="rounded-lg border border-themeBlue p-2">
+          <p>待保存：{LABELS[preview.type]} · {preview.name || preview.id}</p>
+          <p className="break-all text-themeTextGray">
+            {preview.type === "wall"
+              ? `(${preview.x1}, ${preview.y1}) → (${preview.x2}, ${preview.y2}) · 墙宽 ${preview.width} m`
+              : `中心 (${preview.cx}, ${preview.cy}) · ${preview.w} × ${preview.h} m`}
+          </p>
+          <button className="mr-3 text-themeBlue underline" onClick={() => {
+            if (upsertRule(preview)) setPreview(null);
+          }}>确认保存并应用</button>
+          <button className="underline" onClick={() => setPreview(null)}>取消</button>
+        </div>
+      )}
       {ready && legacyMissing.length > 0 && (
         <div className="rounded-lg border border-statusYellow/40 p-2">
           <p className="mb-1 text-statusYellow">

@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -58,6 +59,11 @@ class FakeMux(MODULE.CmdVelMux):
     area_control_timeout = 0.5
     area_control = None
     area_control_received_at = None
+    rules_hold_required = False
+    rules_hold_timeout = 0.5
+    rules_hold = True
+    rules_hold_received_at = None
+    max_acceleration = 100.0
 
     def __init__(self):
         self.pub = FakePublisher()
@@ -69,6 +75,8 @@ class FakeMux(MODULE.CmdVelMux):
             "durable": True,
         }
         self.last_stop_state_publish = 0.0
+        self.last_output_speed = 0.0
+        self.last_output_at = time.monotonic() - 1.0
 
     def get_logger(self):
         return FakeLogger()
@@ -105,6 +113,24 @@ class MissionHoldTest(unittest.TestCase):
         self.assertTrue(mux.stop_requested)
         self.assertEqual(len(mux.pub.messages), 1)
         self.assertEqual(mux.pub.messages[0].twist.linear.x, 0.0)
+
+    def test_rules_hold_blocks_both_sources_and_stale_heartbeat(self):
+        for source in ('manual', 'neupan'):
+            mux = FakeMux()
+            mux.area_rules_required = False
+            mux.rules_hold_required = True
+            command = Twist()
+            command.linear.x = 0.4
+            getattr(mux, f'{source}_callback')(command)
+            MODULE.CmdVelMux.timer_callback(mux)
+            self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.0)
+            MODULE.CmdVelMux.rules_hold_callback(mux, Bool(data=False))
+            mux.last_output_at -= 1.0
+            MODULE.CmdVelMux.timer_callback(mux)
+            self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.4)
+            mux.rules_hold_received_at -= 1.0
+            MODULE.CmdVelMux.timer_callback(mux)
+            self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.0)
 
     def test_legacy_false_cannot_release_persistent_stop(self):
         mux = FakeMux()
@@ -240,6 +266,7 @@ class MissionHoldTest(unittest.TestCase):
         self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.0)
         MODULE.CmdVelMux.area_control_callback(mux, String(data=(
             '{"ready": true, "stop": false, "speed_limit": 0.2}')))
+        mux.last_output_at -= 1.0
         MODULE.CmdVelMux.timer_callback(mux)
         self.assertAlmostEqual(mux.pub.messages[-1].twist.linear.x, 0.2)
         self.assertAlmostEqual(mux.pub.messages[-1].twist.angular.z, 0.1)
@@ -247,6 +274,18 @@ class MissionHoldTest(unittest.TestCase):
         mux.area_control_received_at -= 1.0
         MODULE.CmdVelMux.timer_callback(mux)
         self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.0)
+
+    def test_acceleration_limit_applies_to_reverse_and_forward(self):
+        for requested in (0.8, -0.8):
+            mux = FakeMux()
+            mux.area_rules_required = False
+            mux.max_acceleration = 0.5
+            mux.last_output_at = time.monotonic() - 0.1
+            command = Twist()
+            command.linear.x = requested
+            MODULE.CmdVelMux.manual_callback(mux, command)
+            MODULE.CmdVelMux.timer_callback(mux)
+            self.assertLessEqual(abs(mux.pub.messages[-1].twist.linear.x), 0.051)
 
 
 if __name__ == "__main__":

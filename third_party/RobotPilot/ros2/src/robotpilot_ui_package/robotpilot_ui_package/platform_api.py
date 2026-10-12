@@ -3258,19 +3258,36 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
     @require_role("Operator")
     def s1_create_inspection_task(robot_id):
         body = request.get_json(silent=True)
-        if not isinstance(body, dict) or set(body) - {"name", "waypoint_ids", "compile_only"}:
-            abort(400, "Inspection task accepts only name, waypoint_ids, and compile_only.")
+        if not isinstance(body, dict) or set(body) - {"name", "waypoint_ids", "points", "compile_only", "mission_id"}:
+            abort(400, "Inspection task contains unsupported fields.")
         compile_only = body.get("compile_only", False)
         if not isinstance(compile_only, bool):
             abort(400, "compile_only must be a boolean.")
         name = body.get("name", "指定巡检")
         waypoint_ids = body.get("waypoint_ids")
+        ordered_points = body.get("points")
+        if ordered_points is not None and waypoint_ids is not None:
+            abort(400, "Use either points or waypoint_ids, not both.")
+        if ordered_points is None:
+            if (not isinstance(waypoint_ids, list) or not 1 <= len(waypoint_ids) <= 50
+                    or any(not isinstance(item, str) or not item or len(item) > 128 for item in waypoint_ids)
+                    or len(set(waypoint_ids)) != len(waypoint_ids)):
+                abort(400, "waypoint_ids must contain 1–50 unique waypoint IDs.")
+            ordered_points = [{"waypoint_id": item, "execute_actions": True} for item in waypoint_ids]
+        elif (not isinstance(ordered_points, list) or not 1 <= len(ordered_points) <= 50
+              or any(not isinstance(item, dict) or set(item) != {"waypoint_id", "execute_actions"}
+                     or not isinstance(item["waypoint_id"], str) or not 1 <= len(item["waypoint_id"]) <= 128
+                     or not isinstance(item["execute_actions"], bool) for item in ordered_points)):
+            abort(400, "points must contain 1–50 ordered waypoint references and execute_actions flags.")
+        requested_mission_id = body.get("mission_id")
+        if requested_mission_id is not None and (not isinstance(requested_mission_id, str)
+                                                 or not requested_mission_id.startswith("inspection-")
+                                                 or len(requested_mission_id) > 100):
+            abort(400, "mission_id must identify an inspection mission.")
+        if requested_mission_id and not compile_only:
+            abort(400, "Updating and starting a mission in one request is not supported.")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120:
             abort(400, "Inspection task name is required (1–120 characters).")
-        if (not isinstance(waypoint_ids, list) or not 1 <= len(waypoint_ids) <= 50
-                or any(not isinstance(item, str) or not item or len(item) > 128 for item in waypoint_ids)
-                or len(set(waypoint_ids)) != len(waypoint_ids)):
-            abort(400, "waypoint_ids must contain 1–50 unique waypoint IDs.")
         idempotency_key = request.headers.get("Idempotency-Key", "")
         if not 8 <= len(idempotency_key) <= 128:
             abort(400, "Idempotency-Key must be 8–128 characters.")
@@ -3279,6 +3296,15 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
         snapshot = bridge.snapshot()
         if not snapshot.get("mission_online"):
             abort(503, "Mission manager is offline.")
+        if requested_mission_id:
+            mission_state = snapshot.get("mission") or {}
+            if not any(item.get("id") == requested_mission_id for item in mission_state.get("missions", [])):
+                abort(404, "Inspection mission to update was not found.")
+            if any(item.get("mission_id") == requested_mission_id and item.get("status") in ("RUNNING", "PAUSED", "running", "paused")
+                   for item in [mission_state.get("run") or {}]):
+                abort(409, "A running mission cannot be replaced.")
+            if any(item.get("mission_id") == requested_mission_id for item in mission_state.get("schedules", [])):
+                abort(409, "A scheduled mission cannot be replaced; remove its schedule first.")
         if not compile_only:
             readiness = autonomy_readiness(snapshot)
             if not readiness["ready"]:
@@ -3308,7 +3334,8 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
         try:
             with store.connect() as db:
                 db.execute("BEGIN")
-                for waypoint_id in waypoint_ids:
+                for point_index, point in enumerate(ordered_points):
+                    waypoint_id = point["waypoint_id"]
                     row = db.execute(
                         "SELECT * FROM waypoints WHERE robot_id=? AND waypoint_id=?",
                         (robot_id, waypoint_id),
@@ -3319,7 +3346,7 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
                         abort(409, f"Waypoint {row['name']} is disabled.")
                     if (row["map_id"], row["map_version_id"]) != (map_id, map_version_id):
                         abort(409, f"Waypoint {row['name']} is bound to a different map version.")
-                    point_step_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{waypoint_id}:waypoint"))
+                    point_step_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{point_index}:{waypoint_id}:waypoint"))
                     steps.append({
                         "id": point_step_id, "type": "waypoint",
                         "pose": {"x": row["x"], "y": row["y"],
@@ -3327,6 +3354,8 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
                         "waypointId": waypoint_id, "waypoint_id": waypoint_id,
                         "waypointName": row["name"],
                     })
+                    if not point["execute_actions"]:
+                        continue
                     plan = db.execute(
                         "SELECT actions_json FROM waypoint_action_plans WHERE robot_id=? AND waypoint_id=?",
                         (robot_id, waypoint_id),
@@ -3345,7 +3374,7 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
                             abort(409, "Optional actions and per-action retries are not supported by this mission compiler.")
                         if action["kind"] == "wait":
                             steps.append({
-                                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{waypoint_id}:wait:{index}")),
+                                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{point_index}:{waypoint_id}:wait:{index}")),
                                 "type": "wait", "seconds": action["timeout_ms"] / 1000,
                                 "waypoint_id": waypoint_id,
                             })
@@ -3373,7 +3402,7 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
                             if metadata.get("active", True) is not True:
                                 abort(409, f"Asset {asset_id} is disabled.")
                         steps.append({
-                            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{waypoint_id}:action:{index}")),
+                            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{idempotency_key}:{point_index}:{waypoint_id}:action:{index}")),
                             "type": "inspection_action", "action": action["kind"],
                             "waypoint_id": waypoint_id, "timeout_ms": action["timeout_ms"],
                             "detector_types": detectors, "asset_ids": asset_ids,
@@ -3383,11 +3412,11 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
             abort(503, f"Inspection plan could not be read consistently: {error}")
         if len(steps) > 200:
             abort(400, "Compiled inspection task exceeds the 200-step mission limit.")
-        if not any(step["type"] == "inspection_action" for step in steps):
+        if waypoint_ids is not None and not any(step["type"] == "inspection_action" for step in steps):
             abort(409, "Inspection task needs at least one provider action.")
 
         mission_seed = json_hash({"robot_id": robot_id, "key": idempotency_key, "body": body})
-        mission_id = "inspection-" + mission_seed[:32]
+        mission_id = requested_mission_id or "inspection-" + mission_seed[:32]
         mission = {
             "id": mission_id, "name": name.strip(), "steps": steps,
             "map_id": map_id, "map_version_id": map_version_id,

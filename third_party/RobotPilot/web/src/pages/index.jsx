@@ -45,7 +45,7 @@ const Routing = () => (
       )}
       <Route path="dashboard" element={<Navigate to="/" replace />} />
       <Route path="missions" element={<Navigate to="/route" replace />} />
-      <Route path="inspection" element={<Navigate to="/route#inspection-records" replace />} />
+      <Route path="inspection" element={<Navigate to={`/route${window.location.search}#inspection-records`} replace />} />
       <Route path="waypoint-actions" element={<Navigate to="/route#inspection-setup" replace />} />
       <Route path="*" element={<NotFoundPage />} />
     </Route>

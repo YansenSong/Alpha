@@ -150,6 +150,7 @@ class MissionManager(Node):
         self.deadline = None
         self.step_started = None
         self.nav_seen_active = False
+        self.rule_replan_pending_at = None
         self.goal_sent_ns = None
         self.nav_arrived = False
         self.nav_arrived_at = None
@@ -883,6 +884,11 @@ class MissionManager(Node):
             self._transition("PAUSED", f"safety guard: {guard_reason}",
                              remaining_seconds=remaining)
             return
+        if self.rule_replan_pending_at is not None and self._kind() in ("waypoint", "home"):
+            now = time.monotonic()
+            self.deadline += max(0.0, now - self.rule_replan_pending_at)
+            self.rule_replan_pending_at = now
+            return
         if self._kind() in ("waypoint", "home") and self.nav_arrived:
             now = time.monotonic()
             if self.nav_arrived_at is not None and now - self.nav_arrived_at > 5.0:
@@ -929,6 +935,11 @@ class MissionManager(Node):
             return
         if message.state == NavigationStatus.PLANNING and message.detail.startswith("new goal received"):
             self.nav_seen_active = True
+            self.rule_replan_pending_at = None
+        elif message.state == NavigationStatus.PLANNING and message.detail.startswith("rule_replan_pending"):
+            self.rule_replan_pending_at = self.rule_replan_pending_at or time.monotonic()
+        elif message.state == NavigationStatus.MOVING:
+            self.rule_replan_pending_at = None
         elif self.nav_seen_active and message.state == NavigationStatus.ARRIVED:
             self.nav_arrived = True
             self.nav_arrived_at = time.monotonic()

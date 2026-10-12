@@ -1237,6 +1237,70 @@ class PlatformApiTest(unittest.TestCase):
         self.assertEqual(scheduled.status_code, 202)
         self.assertEqual(self.bridge.calls[-1][0]["command"], "schedule.save")
 
+    def test_ordered_inspection_points_compile_business_transit_business_and_repeat(self):
+        points = [self.client.post(self.base + "/waypoints", json={
+            "map_id": "simulation/map-a", "name": name, "x": index, "y": 0, "yaw": 0,
+        }).json for index, name in enumerate(("Photo", "Corner", "Fire"))]
+        for point in (points[0], points[2]):
+            self.assertEqual(self.client.put(
+                self.base + f"/waypoints/{point['waypoint_id']}/action-plan",
+                json={"actions": [{"kind": "capture", "timeout_ms": 1000}]},
+                headers={"If-Match": '"0"'},
+            ).status_code, 200)
+        ordered = [{"waypoint_id": point["waypoint_id"], "execute_actions": index != 1}
+                   for index, point in enumerate(points)]
+        ordered.append({"waypoint_id": points[0]["waypoint_id"], "execute_actions": False})
+        response = self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Mixed", "points": ordered, "compile_only": True,
+        }, headers={"Idempotency-Key": "ordered-inspection-0001"})
+        self.assertEqual(response.status_code, 201)
+        mission = self.bridge.calls[-1][0]["mission"]
+        self.assertEqual([step["type"] for step in mission["steps"]],
+                         ["waypoint", "inspection_action", "waypoint", "waypoint",
+                          "inspection_action", "waypoint"])
+        self.assertEqual([step["waypoint_id"] for step in mission["steps"] if step["type"] == "waypoint"],
+                         [item["waypoint_id"] for item in points] + [points[0]["waypoint_id"]])
+        self.assertEqual(len({step["id"] for step in mission["steps"]}), len(mission["steps"]))
+        call_count = len(self.bridge.calls)
+        self.assertEqual(self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Mixed", "points": ordered, "compile_only": True,
+        }, headers={"Idempotency-Key": "ordered-inspection-0001"}).status_code, 201)
+        self.assertEqual(len(self.bridge.calls), call_count)
+        self.assertEqual(self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Invalid", "points": [{"waypoint_id": "missing", "execute_actions": False}],
+            "compile_only": True,
+        }, headers={"Idempotency-Key": "ordered-inspection-0002"}).status_code, 404)
+        transit_only = self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Transit route", "points": [{"waypoint_id": points[1]["waypoint_id"], "execute_actions": False}],
+            "compile_only": True,
+        }, headers={"Idempotency-Key": "ordered-inspection-0003"})
+        self.assertEqual(transit_only.status_code, 201)
+        self.assertEqual([step["type"] for step in self.bridge.calls[-1][0]["mission"]["steps"]], ["waypoint"])
+        disabled = self.client.patch(self.base + f"/waypoints/{points[1]['waypoint_id']}",
+                                     json={"enabled": False}, headers={"If-Match": '"1"'})
+        self.assertEqual(disabled.status_code, 200)
+        self.assertEqual(self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Disabled", "points": [{"waypoint_id": points[1]["waypoint_id"], "execute_actions": False}],
+            "compile_only": True,
+        }, headers={"Idempotency-Key": "ordered-inspection-0004"}).status_code, 409)
+        self.assertEqual(self.client.patch(self.base + f"/waypoints/{points[1]['waypoint_id']}",
+                                           json={"enabled": True}, headers={"If-Match": '"2"'}).status_code, 200)
+
+        snapshot = self.bridge.snapshot()
+        snapshot["mission"]["missions"].append(mission)
+        self.bridge.snapshot = lambda: snapshot
+        updated = self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Mixed updated", "points": ordered[:3], "compile_only": True,
+            "mission_id": mission["id"],
+        }, headers={"Idempotency-Key": "ordered-inspection-update-01"})
+        self.assertEqual(updated.status_code, 201)
+        self.assertEqual(self.bridge.calls[-1][0]["mission"]["id"], mission["id"])
+        snapshot["mission"]["schedules"].append({"mission_id": mission["id"]})
+        self.assertEqual(self.client.post(self.base + "/inspection/tasks", json={
+            "name": "Forbidden update", "points": ordered[:3], "compile_only": True,
+            "mission_id": mission["id"],
+        }, headers={"Idempotency-Key": "ordered-inspection-update-02"}).status_code, 409)
+
     def test_inspection_task_blocks_without_fresh_capabilities(self):
         waypoint = self.client.post(self.base + "/waypoints", json={
             "map_id": "simulation/map-a", "name": "Blocked", "x": 0, "y": 0, "yaw": 0,

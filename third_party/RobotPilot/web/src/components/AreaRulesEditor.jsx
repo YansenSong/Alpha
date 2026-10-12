@@ -36,6 +36,7 @@ const AreaRulesEditor = () => {
   } = rulesState;
   const [form, setForm] = useState(INITIAL_FORM);
   const [drawing, setDrawing] = useState(false);
+  const [preview, setPreview] = useState(null);
   const formRef = useRef(form);
   const upsertRef = useRef(upsertRule);
   const mapKeyRef = useRef(mapKey);
@@ -81,12 +82,9 @@ const AreaRulesEditor = () => {
         ...geometry,
       };
       if (current.type === "speed") rule.limit_mps = Number(current.limit_mps);
-      if (current.type === "closure") {
-        rule.expires_at = new Date(
-          Date.now() + Number(current.minutes) * 60000,
-        ).toISOString();
-      }
-      if (upsertRef.current(rule)) toast.info("规则已发送，等待机器人确认");
+      if (current.type === "closure") rule.duration_seconds = Number(current.minutes) * 60;
+      setPreview(rule);
+      setDrawing(false);
     },
     [canEdit],
   );
@@ -107,7 +105,7 @@ const AreaRulesEditor = () => {
     (form.type !== "closure" ||
       (Number.isFinite(Number(form.minutes)) &&
         Number(form.minutes) > 0 &&
-        Number(form.minutes) <= 525600)) &&
+        Number(form.minutes) <= 1440)) &&
     (form.type !== "wall" ||
       (Number.isFinite(Number(form.width)) &&
         Number(form.width) >= 0.01 &&
@@ -123,6 +121,16 @@ const AreaRulesEditor = () => {
           {permissionReason}；编辑地图规则需要 Engineer 权限。
         </p>
       )}
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
+        <div className="h-[340px] min-w-0 sm:h-[440px] xl:h-[600px]">
+          <Map
+            drawingArea={drawing}
+            areaDrawType={form.type}
+            areaWallWidth={Number(form.width)}
+            onAreaDraw={handleAreaDraw}
+          />
+        </div>
+        <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2 font-[RobotoMono]">
         <select
           aria-label="地图规则类型"
@@ -165,7 +173,7 @@ const AreaRulesEditor = () => {
               aria-label="封闭时长"
               type="number"
               min="1"
-              max="525600"
+              max="1440"
               step="1"
               value={form.minutes}
               onChange={setField("minutes")}
@@ -207,19 +215,45 @@ const AreaRulesEditor = () => {
           ? `当前地图有 ${rulesState.rules.length} 条规则。`
           : "等待机器人地图规则服务。"}
       </p>
+      <p className="text-xs text-themeTextGray" role="status">
+        地图 {mapId || "未加载"} · 版本 {mapVersionId || "未验证"} · 导航规则：
+        {rulesState.application === "PENDING" ? "等待存储" :
+          rulesState.application === "STORED" ? "已保存，等待导航确认" :
+          rulesState.application === "APPLIED" ? "已应用" :
+          rulesState.application === "FAILED" ? "应用失败" :
+          rulesState.navigationApplied ? "已应用" : "尚未确认应用"}
+      </p>
+      {rulesState.navigationHold && (
+        <p className="text-xs text-statusYellow" role="status">
+          导航保持停车：{({ WAITING_RULES: "等待规则和地图校验", WAITING_COSTMAP: "等待代价地图确认",
+            REPLANNING: "正在重新规划", PATH_INSTALL: "等待控制器安装新路径",
+            PATH_BLOCKED: "原路径受阻", NO_VALID_PATH: "暂无可行路径",
+            MAP_CHANGED: "地图已切换，等待新目标" })[
+            rulesState.navigationHoldReason] || rulesState.navigationHoldReason}
+        </p>
+      )}
+      <p className="text-xs text-themeTextGray">
+        配置限速：{rulesState.configuredSpeedLimit ?? "—"} m/s · 当前约束速度：
+        {rulesState.constrainedSpeedLimit ?? "—"} m/s · 实际反馈速度：
+        {rulesState.actualSpeed ?? "—"} m/s
+      </p>
+      {preview && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-themeBlue p-2 text-xs">
+          <span>预览：{LABELS[preview.type]} {preview.name || preview.id}</span>
+          <button className="rounded border border-themeBlue px-2 py-1 text-themeBlue"
+            onClick={() => {
+              if (upsertRef.current(preview)) toast.info("规则已发送，等待机器人确认");
+              setPreview(null);
+            }}>确认保存并应用</button>
+          <button className="rounded border border-borderSubtle px-2 py-1"
+            onClick={() => setPreview(null)}>取消</button>
+        </div>
+      )}
       {rulesState.error && (
         <p role="alert" className="text-xs text-statusRed">
           {rulesState.error}
         </p>
       )}
-      <div className="h-[340px] min-w-0 sm:h-[440px] xl:h-[500px]">
-        <Map
-          drawingArea={drawing}
-          areaDrawType={form.type}
-          areaWallWidth={Number(form.width)}
-          onAreaDraw={handleAreaDraw}
-        />
-      </div>
       <details className="rounded-lg border border-borderSubtle p-3">
         <summary className="cursor-pointer text-xs text-themeBlue">
           规则列表与坐标录入
@@ -228,6 +262,8 @@ const AreaRulesEditor = () => {
           <KeepoutZonesEditor {...rulesState} />
         </div>
       </details>
+        </div>
+      </div>
     </div>
   );
 };

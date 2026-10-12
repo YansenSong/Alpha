@@ -21,6 +21,7 @@ import NavStatus from "../components/NavStatus";
 import MapLayers from "../components/MapLayers";
 import SystemAlerts from "../components/SystemAlerts";
 import WaypointLibrary from "../components/WaypointLibrary";
+import SavedInspectionMissionsCard from "../features/inspection-planning/SavedInspectionMissionsCard";
 import useSavedWaypoints from "../shared/hooks/useSavedWaypoints";
 import useKeepoutZones from "../shared/hooks/useKeepoutZones";
 import { addEvent } from "../shared/events/eventLog";
@@ -44,7 +45,9 @@ const MapPage = () => {
   const { robotId, robotMode } = useContext(AuthContext);
   const activeMission = useMissionRun();
   const robotStatus = useRobotStatus();
-  const missionIsActive = ["running", "paused"].includes(activeMission?.status);
+  const missionIsActive = [activeMission?.status, robotStatus.snapshot?.task?.status]
+    .filter(Boolean)
+    .some((status) => ["running", "paused"].includes(String(status).toLowerCase()));
   const { t } = useT();
   const navigationAccess = useRoleAccess("Operator");
   const localizationAccess = useRoleAccess("Engineer");
@@ -85,6 +88,8 @@ const MapPage = () => {
   const [businessAlerts, setBusinessAlerts] = useState([]);
   const alertMapId = robotStatus.snapshot?.current_map?.map_id || "";
   const alertMapVersionId = robotStatus.snapshot?.current_map?.map_version_id || "";
+  const displayedMapIdentity = `${alertMapId}:${alertMapVersionId}`;
+  const displayedMapIdentityRef = useRef(displayedMapIdentity);
 
   useEffect(() => {
     if (!INSPECTION_PROFILE) return undefined;
@@ -124,7 +129,7 @@ const MapPage = () => {
   useEffect(() => {
     if (!INSPECTION_PROFILE || !window.NAV2D) return undefined;
     window.NAV2D._inspectionAlertClickCallback = (alertId) => {
-      window.location.href = `/inspection?alert_id=${encodeURIComponent(alertId)}`;
+      window.location.href = `/route?alert_id=${encodeURIComponent(alertId)}#inspection-records`;
     };
     return () => { window.NAV2D._inspectionAlertClickCallback = null; };
   }, []);
@@ -150,22 +155,15 @@ const MapPage = () => {
 
   const [activeWaypointIndex, setActiveWaypointIndex] = useState(-1);
   const [completedWaypointCount, setCompletedWaypointCount] = useState(0);
-  const [savedRoutes, setSavedRoutes] = useState([]);
-  const [selectedRoute, setSelectedRoute] = useState("");
-  const [routeLoading, setRouteLoading] = useState(false);
-  const routeContextRef = useRef({
-    group: "",
-    map: "",
-    mapId: "",
-    versionId: "",
-  });
-  const selectedRouteRef = useRef(selectedRoute);
-  selectedRouteRef.current = selectedRoute;
-  const routeOperationTopicRef = useRef(null);
-  const runRouteMissionRef = useRef(null);
-  const pendingRouteLoadRef = useRef(false);
-  const pendingRouteTimerRef = useRef(null);
-  const previewedRouteRef = useRef("");
+  useEffect(() => {
+    if (displayedMapIdentityRef.current === displayedMapIdentity) return;
+    displayedMapIdentityRef.current = displayedMapIdentity;
+    setWaypointQueue([]);
+    setActiveWaypointIndex(-1);
+    setCompletedWaypointCount(0);
+    window.NAV2D?.clearPath?.();
+    window.NAV2D?.clearGoalPose?.();
+  }, [displayedMapIdentity]);
 
   const {
     waypoints,
@@ -227,136 +225,6 @@ const MapPage = () => {
 
     return () => localizationTopic.unsubscribe();
   }, [ros]);
-
-  // Route files are authored on the Routes page, then loaded here for preview.
-  // Execution is translated into a map-bound MissionManager task.
-  useEffect(() => {
-    if (!ros || !window.ROSLIB) return;
-
-    const requestTopic = new window.ROSLIB.Topic({
-      ros,
-      name: AppConfig.ROUTE_DATA_REQ_TOPIC,
-      messageType: "std_msgs/Empty",
-    });
-    const responseTopic = new window.ROSLIB.Topic({
-      ros,
-      name: AppConfig.ROUTE_DATA_RESP_TOPIC,
-      messageType: "std_msgs/String",
-    });
-    const operationTopic = new window.ROSLIB.Topic({
-      ros,
-      name: AppConfig.UI_OPERATION_TOPIC,
-      messageType: "std_msgs/String",
-    });
-    routeOperationTopicRef.current = operationTopic;
-    const waypointsTopic = new window.ROSLIB.Topic({
-      ros,
-      name: "/WayPoints_topic",
-      messageType: "robotpilot_ui_msgs/ArrayPoseStampedWithCovariance",
-    });
-
-    responseTopic.subscribe((message) => {
-      try {
-        const response = JSON.parse(message.data || "{}");
-        const active = response.active_files || {};
-        const mapChanged =
-          routeContextRef.current.group !== (active.group || "") ||
-          routeContextRef.current.map !== (active.map || "") ||
-          routeContextRef.current.mapId !== (active.map_id || "") ||
-          routeContextRef.current.versionId !==
-            (active.map_version_id || active.map_id || "");
-        routeContextRef.current = {
-          group: active.group || "",
-          map: active.map || "",
-          mapId: active.map_id || "",
-          versionId: active.map_version_id || active.map_id || "",
-        };
-        const options = [];
-        for (const groupEntry of response.structure || []) {
-          for (const [group, maps] of Object.entries(groupEntry || {})) {
-            for (const mapEntry of maps || []) {
-              for (const [map, routes] of Object.entries(mapEntry || {})) {
-                if (group !== active.group || map !== active.map) continue;
-                for (const file of routes || []) {
-                  const name = String(file).replace(/\.csv$/i, "");
-                  options.push({ value: name, label: name.replace(/_/g, " ") });
-                }
-              }
-            }
-          }
-        }
-        setSavedRoutes(options);
-        if (mapChanged) {
-          previewedRouteRef.current = "";
-          setWaypointQueue([]);
-          setActiveWaypointIndex(-1);
-          setCompletedWaypointCount(0);
-          window.NAV2D?.clearGoalPose?.();
-        }
-        setSelectedRoute((current) =>
-          !mapChanged && options.some((route) => route.value === current)
-            ? current
-            : "",
-        );
-      } catch (error) {
-        console.error("Invalid route catalog response:", error);
-      }
-    });
-
-    waypointsTopic.subscribe((message) => {
-      if (!pendingRouteLoadRef.current) return;
-      const shouldExecute = pendingRouteLoadRef.current === "execute";
-      pendingRouteLoadRef.current = false;
-      window.clearTimeout(pendingRouteTimerRef.current);
-      pendingRouteTimerRef.current = null;
-      setRouteLoading(false);
-
-      const route = (message?.poses || [])
-        .map((entry) => {
-          const pose = entry?.pose?.pose;
-          const covariance = entry?.pose?.covariance || [];
-          if (!pose) return null;
-          return {
-            ...pose,
-            dwellSeconds:
-              Math.max(0, Number(covariance[1]) || 0) * 3600 +
-              Math.max(0, Number(covariance[2]) || 0) * 60,
-          };
-        })
-        .filter((pose) => pose?.position && pose?.orientation);
-      if (!route.length) {
-        previewedRouteRef.current = "";
-        setWaypointQueue([]);
-        setActiveWaypointIndex(-1);
-        setCompletedWaypointCount(0);
-        toast.warn(t("The selected route has no waypoints."));
-        return;
-      }
-
-      setWaypointQueue(route);
-      previewedRouteRef.current = selectedRouteRef.current;
-      setActiveWaypointIndex(-1);
-      setCompletedWaypointCount(0);
-      if (shouldExecute) {
-        runRouteMissionRef.current?.(route, selectedRouteRef.current);
-      }
-    });
-
-    requestTopic.publish();
-    return () => {
-      responseTopic.unsubscribe();
-      waypointsTopic.unsubscribe();
-      if (pendingRouteTimerRef.current) {
-        window.clearTimeout(pendingRouteTimerRef.current);
-      }
-      pendingRouteLoadRef.current = false;
-      pendingRouteTimerRef.current = null;
-      if (routeOperationTopicRef.current === operationTopic) {
-        routeOperationTopicRef.current = null;
-      }
-      setRouteLoading(false);
-    };
-  }, [ros, t]);
 
   const startManualSteps = useCallback(
     async (steps, name) => {
@@ -456,7 +324,6 @@ const MapPage = () => {
     },
     [startManualSteps, t],
   );
-  runRouteMissionRef.current = runRouteMission;
 
   const saveWaypointAt = async (name, pose, pointType = "inspection") => {
     if (!waypointAccess.allowed) {
@@ -646,57 +513,30 @@ const MapPage = () => {
   const executeQueue = useCallback(() => {
     if (INSPECTION_PROFILE) return;
     if (!waypointQueueRef.current.length) return;
-    runRouteMission(
-      waypointQueueRef.current,
-      previewedRouteRef.current || t("Manual route"),
-    );
+    runRouteMission(waypointQueueRef.current, t("Manual route"));
   }, [runRouteMission, t]);
 
-  const loadSelectedRoute = (route, execute = false) => {
-    if (INSPECTION_PROFILE || missionIsActive || routeLoading) return;
-    if (!route) {
-      toast.warn(t("Select a saved route first."));
+  const previewInspectionMission = (mission) => {
+    const route = (mission.steps || [])
+      .filter((step) => step.type === "waypoint" && step.pose)
+      .map((step) => ({
+        position: { x: Number(step.pose.x), y: Number(step.pose.y), z: 0 },
+        orientation: {
+          x: 0,
+          y: 0,
+          z: Number(step.pose.z) || 0,
+          w: Number.isFinite(Number(step.pose.w)) ? Number(step.pose.w) : 1,
+        },
+      }));
+    if (!route.length) {
+      toast.warn("所选巡检任务没有可预览的航点。");
       return;
     }
-    const { group, map } = routeContextRef.current;
-    if (!group || !map || group === "Null" || map === "Null") {
-      toast.warn(t("Waiting for the active simulation map."));
-      return;
-    }
-    if (!routeOperationTopicRef.current) {
-      toast.error(t("Route service is not connected."));
-      return;
-    }
-
-    pendingRouteLoadRef.current = execute ? "execute" : "preview";
-    setRouteLoading(true);
-    pendingRouteTimerRef.current = window.setTimeout(() => {
-      pendingRouteLoadRef.current = false;
-      pendingRouteTimerRef.current = null;
-      setRouteLoading(false);
-      toast.error(t("Timed out while loading the selected route."));
-    }, 10000);
-
-    routeOperationTopicRef.current.publish(
-      new window.ROSLIB.Message({
-        data: `change_route/${JSON.stringify({
-          group,
-          map,
-          route,
-        })}`,
-      }),
-    );
-  };
-
-  const executeSelectedRoute = () => {
-    if (
-      previewedRouteRef.current === selectedRoute &&
-      waypointQueueRef.current.length
-    ) {
-      executeQueue();
-      return;
-    }
-    loadSelectedRoute(selectedRoute, true);
+    setWaypointQueue(route);
+    setActiveWaypointIndex(-1);
+    setCompletedWaypointCount(0);
+    window.NAV2D?.drawRoutePlan?.(route);
+    mapRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
   };
 
   // Cleanup on unmount
@@ -748,7 +588,7 @@ const MapPage = () => {
             <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">地图内业务告警</p><strong>{robotStatus.stale ? "未知" : businessAlerts.filter((item) => item.state !== "CLOSED").length}</strong><p className="truncate text-xs">{robotStatus.stale ? "地图状态过期" : businessAlerts[0]?.category || "暂无当前版本告警"}</p></div>
             <div className="col-span-2 flex items-center justify-between rounded-lg border border-statusYellow/40 bg-statusYellow/5 p-3 text-xs text-statusYellow sm:col-span-5">
               <span>{robotStatus.error || (robotStatus.stale ? "运行状态过期或不可用；卡片不代表实时状态。" : `运行模式：${robotMode || "unknown"}。物理急停状态未由该接口确认。`)}</span>
-              <a className="shrink-0 underline" href="/inspection">查看巡检结果与告警</a>
+              <a className="shrink-0 underline" href="/route#inspection-records">查看巡检结果与告警</a>
             </div>
           </section>
         )}
@@ -857,61 +697,22 @@ const MapPage = () => {
               stale={waypointsStale}
               legacyWaypoints={legacyWaypoints}
               onImportLegacy={importLegacyWaypoints}
+              inspectionOnly={INSPECTION_PROFILE}
             />
           </div>
 
-          {!INSPECTION_PROFILE && (
-            <div className="dashboard-card flex min-w-0 flex-col gap-3 p-3 font-[RobotoMono] sm:col-span-2 sm:p-4 lg:col-span-4">
-              <div>
-                <p className="mb-2 text-xs uppercase tracking-wider text-themeTextGray">
-                  {t("Saved Routes")}
-                </p>
-                <select
-                  value={selectedRoute}
-                  onChange={(event) => {
-                    const route = event.target.value;
-                    setSelectedRoute(route);
-                    selectedRouteRef.current = route;
-                    previewedRouteRef.current = "";
-                    setWaypointQueue([]);
-                    setActiveWaypointIndex(-1);
-                    setCompletedWaypointCount(0);
-                    loadSelectedRoute(route);
-                  }}
-                  disabled={
-                    routeLoading || missionIsActive || !savedRoutes.length
-                  }
-                  className="min-h-10 w-full min-w-0 rounded-lg border border-borderSubtle bg-bgCard px-3 text-sm text-textWhiteHover outline-none focus:border-themeBlue disabled:opacity-50"
-                >
-                  <option value="" disabled hidden>
-                    {t("Select a saved route…")}
-                  </option>
-                  {savedRoutes.map((route) => (
-                    <option key={route.value} value={route.value}>
-                      {route.label}
-                    </option>
-                  ))}
-                </select>
-                {!savedRoutes.length && (
-                  <p className="mt-2 text-xs leading-5 text-themeTextGray">
-                    {t("Create and save a route on the Routes page first.")}
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={executeSelectedRoute}
-                disabled={
-                  !selectedRoute ||
-                  routeLoading ||
-                  missionIsActive ||
-                  !savedRoutes.length
-                }
-                className="min-h-10 w-full rounded-lg border border-themeBlue bg-themeBlue/10 px-4 text-xs font-semibold text-themeBlue transition-colors hover:bg-themeBlue hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {t(routeLoading ? "Loading route…" : "Execute Route")}
-              </button>
-              {waypointQueue.length > 0 && (
-                <div className="min-w-0 border-t border-borderSubtle pt-3">
+          <SavedInspectionMissionsCard
+            mapId={alertMapId}
+            mapVersionId={alertMapVersionId}
+            stale={
+              robotStatus.stale ||
+              robotStatus.snapshot?.current_map?.stale !== false
+            }
+            active={missionIsActive}
+            onPreview={previewInspectionMission}
+          />
+          {!INSPECTION_PROFILE && waypointQueue.length > 0 && (
+            <div className="dashboard-card min-w-0 space-y-3 p-3 font-[RobotoMono] sm:col-span-2 sm:p-4 lg:col-span-4">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <p className="text-xs uppercase tracking-wider text-themeTextGray">
                       {t("Waypoint Queue")} ({waypointQueue.length})
@@ -950,8 +751,6 @@ const MapPage = () => {
                       <T>{"Execute Queue"}</T>
                     </button>
                   )}
-                </div>
-              )}
             </div>
           )}
         </section>

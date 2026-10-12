@@ -21,6 +21,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <nlohmann/json.hpp>
 
 #include "tf2/exceptions.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -76,6 +77,16 @@ AckermannSmacBridge::AckermannSmacBridge(const rclcpp::NodeOptions & options)
   auto status_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
   planning_status_pub_ = create_publisher<std_msgs::msg::String>(
     planning_status_topic_, status_qos);
+  rules_hold_pub_ = create_publisher<std_msgs::msg::Bool>("/navigation/rules_hold", qos);
+  rules_status_pub_ = create_publisher<std_msgs::msg::String>("/navigation/rules_status", qos);
+  rules_sub_ = create_subscription<std_msgs::msg::String>("/area_rules/state", status_qos,
+    std::bind(&AckermannSmacBridge::onRules, this, std::placeholders::_1));
+  path_installed_sub_ = create_subscription<std_msgs::msg::String>("/neupan/path_install_status", qos,
+    std::bind(&AckermannSmacBridge::onPathInstalled, this, std::placeholders::_1));
+  mask_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/area_rules/keepout_mask", status_qos,
+    std::bind(&AckermannSmacBridge::onMask, this, std::placeholders::_1));
+  costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/global_costmap/costmap", qos,
+    std::bind(&AckermannSmacBridge::onCostmap, this, std::placeholders::_1));
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -86,6 +97,8 @@ AckermannSmacBridge::AckermannSmacBridge(const rclcpp::NodeOptions & options)
   remaining_distance_timer_ = create_wall_timer(
     std::max(std::chrono::milliseconds(1), period),
     std::bind(&AckermannSmacBridge::publishRemainingDistance, this));
+  rules_timer_ = create_wall_timer(std::chrono::milliseconds(100),
+    std::bind(&AckermannSmacBridge::checkRules, this));
 
   active_path_.header.frame_id = global_frame_;
 
@@ -103,6 +116,28 @@ void AckermannSmacBridge::onGoal(
     return;
   }
 
+  try {
+    saved_goal_ = transformGoal(*msg);
+    have_goal_ = true;
+    map_requires_new_goal_ = false;
+    active_path_.poses.clear();
+    path_installed_ = false;
+    rules_hold_ = true;
+  } catch (const tf2::TransformException & ex) {
+    publishPlanningStatus(std::string("failed: cannot transform goal: ") + ex.what());
+    return;
+  }
+  planToSavedGoal();
+}
+
+void AckermannSmacBridge::planToSavedGoal()
+{
+  if (!have_goal_ || !have_rules_ || !rules_ready_ || !costmapApplied()) {
+    rules_hold_ = true;
+    publishPlanningStatus("rule_replan_pending");
+    return;
+  }
+
   publishPlanningStatus("planning");
 
   GoalHandle::SharedPtr previous_goal;
@@ -110,6 +145,11 @@ void AckermannSmacBridge::onGoal(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     generation = ++goal_generation_;
+    planning_ = true;
+    planning_rules_version_ = rules_version_;
+    planning_mask_generation_ = mask_generation_;
+    waiting_install_ = false;
+    path_installed_ = false;
     previous_goal = active_goal_handle_;
     active_goal_handle_.reset();
     active_path_ = nav_msgs::msg::Path();
@@ -129,9 +169,10 @@ void AckermannSmacBridge::onGoal(
   geometry_msgs::msg::PoseStamped goal;
   geometry_msgs::msg::PoseStamped start;
   try {
-    goal = transformGoal(*msg);
+    goal = saved_goal_;
     start = currentRobotPose();
   } catch (const tf2::TransformException & ex) {
+    planning_ = false;
     RCLCPP_ERROR(get_logger(), "Cannot prepare Smac goal: %s", ex.what());
     publishPlanningStatus(std::string("failed: cannot prepare goal: ") + ex.what());
     return;
@@ -141,6 +182,7 @@ void AckermannSmacBridge::onGoal(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(action_server_wait_timeout_))))
   {
+    planning_ = false;
     RCLCPP_ERROR(
       get_logger(), "Planner action '%s' is not available", action_name_.c_str());
     publishPlanningStatus("failed: planner action server unavailable");
@@ -205,6 +247,7 @@ void AckermannSmacBridge::onResult(
     }
 
     active_goal_handle_.reset();
+    planning_ = false;
     active_path_ = nav_msgs::msg::Path();
     active_path_.header.frame_id = global_frame_;
     active_path_.header.stamp = now();
@@ -212,7 +255,9 @@ void AckermannSmacBridge::onResult(
     RCLCPP_WARN(
       get_logger(), "Smac planning failed or returned an empty path (result code=%d)",
       static_cast<int>(wrapped_result.code));
-    publishPlanningStatus("failed: planner returned no path");
+    rules_hold_ = true;
+    next_replan_at_ = now() + rclcpp::Duration::from_seconds(2.0);
+    publishPlanningStatus("rule_replan_pending");
     return;
   }
 
@@ -222,6 +267,14 @@ void AckermannSmacBridge::onResult(
   }
 
   active_goal_handle_.reset();
+  planning_ = false;
+  if (!costmapApplied() || planning_rules_version_ != rules_version_ ||
+    planning_mask_generation_ != mask_generation_ || pathBlocked(wrapped_result.result->path)) {
+    rules_hold_ = true;
+    next_replan_at_ = now() + rclcpp::Duration::from_seconds(1.0);
+    publishPlanningStatus("rule_replan_pending");
+    return;
+  }
   // Preserve Smac's complete path, including orientation at Reeds-Shepp
   // reverse segments. The bridge deliberately does not recompute yaw.
   active_path_ = wrapped_result.result->path;
@@ -229,7 +282,10 @@ void AckermannSmacBridge::onResult(
   // Only paths requested through /goal_pose are sent to the controller.
   // Preview requests use the same planner action but never enter this bridge.
   execution_path_pub_->publish(active_path_);
-  publishPlanningStatus("succeeded");
+  waiting_install_ = true;
+  path_installed_ = false;
+  rules_hold_ = true;
+  publishPlanningStatus("rule_replan_pending");
 
   RCLCPP_INFO(
     get_logger(), "Smac planning succeeded: %zu poses in %.3f seconds",
@@ -243,6 +299,190 @@ void AckermannSmacBridge::publishPlanningStatus(const std::string & status)
   std_msgs::msg::String message;
   message.data = status;
   planning_status_pub_->publish(message);
+}
+
+void AckermannSmacBridge::onRules(const std_msgs::msg::String::SharedPtr msg)
+{
+  try {
+    const auto state = nlohmann::json::parse(msg->data);
+    const auto key = state.value("map_key", std::string{});
+    const auto id = state.value("map_id", std::string{});
+    const auto version_id = state.value("map_version_id", std::string{});
+    const auto version = state.value("version", std::uint64_t{0});
+    const auto generation = state.value("mask_generation", std::uint64_t{0});
+    const auto stamp = state.value("mask_stamp", nlohmann::json::object());
+    const auto stamp_sec = stamp.value("sec", -1);
+    const auto stamp_nanosec = stamp.value("nanosec", 0u);
+    const bool map_changed = have_rules_ && (key != rules_map_key_ || id != rules_map_id_ ||
+      version_id != rules_map_version_id_);
+    const bool changed = !have_rules_ || key != rules_map_key_ || id != rules_map_id_ ||
+      version_id != rules_map_version_id_ || version != rules_version_ ||
+      generation != mask_generation_;
+    rules_map_key_ = key;
+    rules_map_id_ = id;
+    rules_map_version_id_ = version_id;
+    rules_version_ = version;
+    mask_generation_ = generation;
+    expected_mask_sec_ = stamp_sec;
+    expected_mask_nanosec_ = stamp_nanosec;
+    rules_ready_ = state.value("ready", false) && !key.empty() && !id.empty();
+    have_rules_ = true;
+    rules_received_at_ = now();
+    if (changed || !rules_ready_) {
+      rules_hold_ = true;
+      costmap_verified_ = false;
+      if (have_goal_) {
+        publishPlanningStatus("rule_replan_pending");
+      }
+    }
+    if (map_changed) {
+      map_requires_new_goal_ = true;
+      ++goal_generation_;
+      if (active_goal_handle_) {(void)action_client_->async_cancel_goal(active_goal_handle_);}
+      active_goal_handle_.reset();
+      planning_ = false;
+      have_goal_ = false;
+      active_path_.poses.clear();
+      path_installed_ = false;
+      publishPlanningStatus("rule_replan_pending");
+    }
+  } catch (const std::exception & ex) {
+    have_rules_ = false;
+    rules_ready_ = false;
+    rules_hold_ = true;
+    RCLCPP_WARN(get_logger(), "Invalid area rules state: %s", ex.what());
+  }
+}
+
+void AckermannSmacBridge::onMask(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+{
+  mask_ = *msg;
+  have_mask_ = true;
+  mask_received_at_ = now();
+  costmap_verified_ = false;
+  rules_hold_ = true;
+}
+
+void AckermannSmacBridge::onCostmap(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+{
+  costmap_ = *msg;
+  have_costmap_ = true;
+  costmap_received_at_ = now();
+  costmap_verified_ = false;
+  if (!have_mask_ || costmap_received_at_ < mask_received_at_ ||
+    costmap_.header.frame_id != mask_.header.frame_id ||
+    costmap_.info.resolution <= 0.0f || mask_.info.resolution <= 0.0f) {
+    return;
+  }
+  const auto & info = mask_.info;
+  if (std::abs(info.origin.orientation.z) > 1e-6 ||
+    std::abs(costmap_.info.origin.orientation.z) > 1e-6) {
+    return;
+  }
+  if (mask_.data.size() != static_cast<std::size_t>(info.width) * info.height) {
+    return;
+  }
+  for (std::size_t i = 0; i < mask_.data.size(); ++i) {
+    if (mask_.data[i] < 99) {
+      continue;
+    }
+    const double x = info.origin.position.x + (static_cast<double>(i % info.width) + 0.5) * info.resolution;
+    const double y = info.origin.position.y + (static_cast<double>(i / info.width) + 0.5) * info.resolution;
+    const auto cx = static_cast<int>(std::floor((x - costmap_.info.origin.position.x) /
+      costmap_.info.resolution));
+    const auto cy = static_cast<int>(std::floor((y - costmap_.info.origin.position.y) /
+      costmap_.info.resolution));
+    if (cx < 0 || cy < 0 || cx >= static_cast<int>(costmap_.info.width) ||
+      cy >= static_cast<int>(costmap_.info.height) ||
+      costmap_.data[static_cast<std::size_t>(cy) * costmap_.info.width + cx] < 99) {
+      return;
+    }
+  }
+  costmap_verified_ = true;
+}
+
+bool AckermannSmacBridge::costmapApplied() const
+{
+  return have_rules_ && rules_ready_ && have_mask_ && have_costmap_ && costmap_verified_ &&
+    mask_.header.stamp.sec == expected_mask_sec_ &&
+    mask_.header.stamp.nanosec == expected_mask_nanosec_ &&
+    (now() - rules_received_at_).seconds() <= 3.0 &&
+    (now() - costmap_received_at_).seconds() <= 3.0;
+}
+
+bool AckermannSmacBridge::pathBlocked(const nav_msgs::msg::Path & path) const
+{
+  if (!have_mask_ || path.header.frame_id != mask_.header.frame_id ||
+    mask_.info.resolution <= 0.0f || path.poses.empty() ||
+    mask_.data.size() != static_cast<std::size_t>(mask_.info.width) * mask_.info.height) {
+    return true;
+  }
+  const auto occupied = [this](double x, double y) {
+      const auto & info = mask_.info;
+      const int col = static_cast<int>(std::floor((x - info.origin.position.x) / info.resolution));
+      const int row = static_cast<int>(std::floor((y - info.origin.position.y) / info.resolution));
+      return col < 0 || row < 0 || col >= static_cast<int>(info.width) ||
+             row >= static_cast<int>(info.height) ||
+             mask_.data[static_cast<std::size_t>(row) * info.width + col] >= 99;
+    };
+  for (std::size_t i = 0; i < path.poses.size(); ++i) {
+    const auto & p = path.poses[i].pose.position;
+    if (occupied(p.x, p.y)) {return true;}
+    if (i == 0) {continue;}
+    const auto & a = path.poses[i - 1].pose.position;
+    const auto steps = std::max(1, static_cast<int>(std::ceil(std::hypot(p.x - a.x, p.y - a.y) /
+      (mask_.info.resolution * 0.5))));
+    for (int step = 1; step < steps; ++step) {
+      const double t = static_cast<double>(step) / steps;
+      if (occupied(a.x + t * (p.x - a.x), a.y + t * (p.y - a.y))) {return true;}
+    }
+  }
+  return false;
+}
+
+void AckermannSmacBridge::onPathInstalled(const std_msgs::msg::String::SharedPtr msg)
+{
+  try {
+    const auto ack = nlohmann::json::parse(msg->data);
+    if (waiting_install_ && ack.value("installed", false) &&
+      ack.value("stamp_sec", -1) == active_path_.header.stamp.sec &&
+      ack.value("stamp_nanosec", -1) == static_cast<int>(active_path_.header.stamp.nanosec) &&
+      ack.value("pose_count", 0) == static_cast<int>(active_path_.poses.size())) {
+      waiting_install_ = false;
+      path_installed_ = true;
+    }
+  } catch (const std::exception &) {
+    // Invalid controller acknowledgements never release the hold.
+  }
+}
+
+void AckermannSmacBridge::checkRules()
+{
+  const bool applied = costmapApplied();
+  const bool blocked = have_goal_ && !active_path_.poses.empty() && pathBlocked(active_path_);
+  if (!applied || map_requires_new_goal_ || blocked || planning_ || waiting_install_ ||
+    (have_goal_ && !path_installed_)) {
+    rules_hold_ = true;
+  } else {
+    if (rules_hold_ && have_goal_) {publishPlanningStatus("succeeded");}
+    rules_hold_ = false;
+  }
+  if (have_goal_ && applied && (blocked || active_path_.poses.empty()) &&
+    !planning_ && !waiting_install_ && now() >= next_replan_at_) {
+    planToSavedGoal();
+  }
+  const std::string reason = !have_rules_ || !rules_ready_ ? "WAITING_RULES" :
+    !applied ? "WAITING_COSTMAP" : planning_ ? "REPLANNING" :
+    waiting_install_ ? "PATH_INSTALL" : blocked ? "PATH_BLOCKED" :
+    map_requires_new_goal_ ? "MAP_CHANGED" :
+    have_goal_ && !path_installed_ ? "NO_VALID_PATH" : "READY";
+  rules_hold_pub_->publish(std_msgs::msg::Bool().set__data(rules_hold_));
+  nlohmann::json state = {{"applied", applied}, {"hold", rules_hold_},
+    {"reason", reason},
+    {"map_key", rules_map_key_}, {"map_id", rules_map_id_},
+    {"map_version_id", rules_map_version_id_}, {"rules_version", rules_version_},
+    {"mask_generation", mask_generation_}};
+  rules_status_pub_->publish(std_msgs::msg::String().set__data(state.dump()));
 }
 
 geometry_msgs::msg::PoseStamped AckermannSmacBridge::transformGoal(

@@ -59,6 +59,9 @@ class CmdVelMux(Node):
         self.area_control_sub = self.create_subscription(
             String, '/area_rules/control', self.area_control_callback, 10
         )
+        self.rules_hold_sub = self.create_subscription(
+            Bool, '/navigation/rules_hold', self.rules_hold_callback, 10
+        )
 
         self.neupan_msg: Twist | None = None
         self.neupan_received_at: float | None = None
@@ -92,6 +95,16 @@ class CmdVelMux(Node):
         self.area_control_timeout = float(self.get_parameter('area_control_timeout').value)
         self.area_control = None
         self.area_control_received_at = None
+        self.declare_parameter('rules_hold_required', False)
+        self.declare_parameter('rules_hold_timeout', 0.5)
+        self.rules_hold_required = bool(self.get_parameter('rules_hold_required').value)
+        self.rules_hold_timeout = float(self.get_parameter('rules_hold_timeout').value)
+        self.rules_hold = True
+        self.rules_hold_received_at = None
+        self.declare_parameter('max_acceleration_mps2', 0.5)
+        self.max_acceleration = max(0.01, float(self.get_parameter('max_acceleration_mps2').value))
+        self.last_output_speed = 0.0
+        self.last_output_at = time.monotonic()
 
         self.timer = self.create_timer(0.05, self.timer_callback)
 
@@ -308,6 +321,8 @@ class CmdVelMux(Node):
             return False
         if self.mission_hold_requested:
             return False
+        if self.rules_hold_active():
+            return False
         now = time.monotonic()
         manual_is_fresh = (
             self.manual_msg is not None
@@ -339,6 +354,8 @@ class CmdVelMux(Node):
             return 'Persistent software stop state is not verified'
         if self.mission_hold_requested:
             return 'Task hold is active'
+        if self.rules_hold_active():
+            return 'Navigation rules hold is active or stale'
         now = time.monotonic()
         if (self.manual_msg is not None and self.manual_received_at is not None
                 and now - self.manual_received_at <= self.manual_cmd_timeout
@@ -382,6 +399,17 @@ class CmdVelMux(Node):
     def mission_hold_callback(self, msg: Bool):
         self.mission_hold_requested = bool(msg.data)
 
+    def rules_hold_callback(self, msg: Bool):
+        self.rules_hold = bool(msg.data)
+        self.rules_hold_received_at = time.monotonic()
+
+    def rules_hold_active(self):
+        if self.rules_hold_received_at is None:
+            return self.rules_hold_required
+        if time.monotonic() - self.rules_hold_received_at > self.rules_hold_timeout:
+            return True
+        return self.rules_hold
+
     def area_control_callback(self, msg: String):
         try:
             control = json.loads(msg.data)
@@ -405,7 +433,8 @@ class CmdVelMux(Node):
         area_blocked = ((self.area_rules_required or self.area_control_received_at is not None)
                         and (not area_fresh or not self.area_control['ready']
                              or self.area_control['stop']))
-        if self.stop_requested or self.mission_hold_requested or area_blocked:
+        if (self.stop_requested or self.mission_hold_requested or
+                self.rules_hold_active() or area_blocked):
             # Publish at the mux timer rate so the controller receives a
             # continuous zero command and cannot resume from a stale command.
             twist = Twist()
@@ -439,6 +468,18 @@ class CmdVelMux(Node):
                     twist.angular.z *= ratio
 
         ts = TwistStamped()
+        now = time.monotonic()
+        requested = twist.linear.x
+        if source != 'stop' and abs(requested) > abs(self.last_output_speed):
+            allowed = abs(self.last_output_speed) + self.max_acceleration * max(
+                0.0, min(now - self.last_output_at, 0.2))
+            if abs(requested) > allowed:
+                twist = copy.deepcopy(twist)
+                ratio = allowed / abs(requested)
+                twist.linear.x *= ratio
+                twist.angular.z *= ratio
+        self.last_output_speed = twist.linear.x
+        self.last_output_at = now
         ts.header.stamp = self.get_clock().now().to_msg()
         ts.header.frame_id = 'base_link'
         ts.twist = twist

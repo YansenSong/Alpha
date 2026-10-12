@@ -61,7 +61,14 @@ def validate_rule(raw):
         if not 0.01 <= rule["limit_mps"] <= 5:
             raise ValueError("speed limit must be 0.01–5 m/s")
     if rule["type"] == "closure":
-        expires = expiry(raw.get("expires_at"))
+        if "duration_seconds" in raw:
+            duration = finite(raw["duration_seconds"], "duration_seconds")
+            if not 1 <= duration <= 86400:
+                raise ValueError("closure duration must be 1–86400 seconds")
+            from datetime import timedelta
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration)
+        else:
+            expires = expiry(raw.get("expires_at"))
         if expires <= datetime.now(timezone.utc):
             raise ValueError("closure expiry must be in the future")
         rule["expires_at"] = expires.isoformat()
@@ -81,6 +88,17 @@ def map_key(grid):
     digest = hashlib.sha256(json.dumps(metadata).encode())
     digest.update(bytes((int(value) & 255 for value in grid.data)))
     return digest.hexdigest()[:24]
+
+
+def occupancy_map_id(grid):
+    """Match route_store/map_bundle_monitor's 2D content identity exactly."""
+    info = grid.info
+    values = (info.width, info.height, info.resolution,
+              info.origin.position.x, info.origin.position.y,
+              info.origin.orientation.z, info.origin.orientation.w)
+    digest = hashlib.sha256(json.dumps(list(values), separators=(",", ":")).encode())
+    digest.update(bytes((int(value) & 255 for value in grid.data)))
+    return digest.hexdigest()[:12]
 
 
 def yaw_of(quat):

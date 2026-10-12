@@ -27,6 +27,7 @@ const WaypointLibrary = ({
   stale = false,
   legacyWaypoints,
   onImportLegacy,
+  inspectionOnly = false,
 }) => {
   const { t } = useT();
   const ros = useRos();
@@ -74,7 +75,11 @@ const WaypointLibrary = ({
       return;
     }
     try {
-      const saved = await onAdd(trimmed, currentPoseRef.current, pointType);
+      const saved = await onAdd(
+        trimmed,
+        currentPoseRef.current,
+        inspectionOnly ? "inspection" : pointType,
+      );
       if (saved === false) return;
       setName("");
       setPointType("inspection");
@@ -129,10 +134,14 @@ const WaypointLibrary = ({
     }
   };
 
+  const visibleWaypoints = inspectionOnly
+    ? waypoints.filter((waypoint) => waypoint.point_type === "inspection")
+    : waypoints;
+
   return (
     <div className="dashboard-card h-full p-3 font-[RobotoMono]">
       <p className="mb-2 text-xs uppercase tracking-wider text-themeTextGray">
-        {t("Saved Waypoints")}
+        {inspectionOnly ? "已保存巡检点" : t("Saved Waypoints")}
       </p>
 
       <div className="mb-2 flex gap-2">
@@ -155,20 +164,22 @@ const WaypointLibrary = ({
           {t("Save here")}
         </button>
       </div>
-      <div className="mb-2 flex items-center gap-2 text-[10px] text-themeTextGray">
-        <label htmlFor="new-waypoint-type">点位类型</label>
-        <select
-          id="new-waypoint-type"
-          value={pointType}
-          onChange={(event) => setPointType(event.target.value)}
-          disabled={!waypointAccess.allowed}
-          className="rounded border border-borderSubtle bg-bgSurface px-2 py-1"
-        >
-          <option value="inspection">巡检点</option>
-          <option value="charge">充电点（仅已配置点位）</option>
-          <option value="shelter">避雨点（仅已配置点位）</option>
-        </select>
-      </div>
+      {!inspectionOnly && (
+        <div className="mb-2 flex items-center gap-2 text-[10px] text-themeTextGray">
+          <label htmlFor="new-waypoint-type">点位类型</label>
+          <select
+            id="new-waypoint-type"
+            value={pointType}
+            onChange={(event) => setPointType(event.target.value)}
+            disabled={!waypointAccess.allowed}
+            className="rounded border border-borderSubtle bg-bgSurface px-2 py-1"
+          >
+            <option value="inspection">巡检点</option>
+            <option value="charge">充电点（仅已配置点位）</option>
+            <option value="shelter">避雨点（仅已配置点位）</option>
+          </select>
+        </div>
+      )}
 
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] text-themeTextGray">
         <span>
@@ -205,15 +216,17 @@ const WaypointLibrary = ({
         </div>
       )}
 
-      {waypoints.length === 0 ? (
+      {visibleWaypoints.length === 0 ? (
         <p className="text-xs text-themeTextGray opacity-70">
-          {t(
-            "No saved waypoints yet — drive somewhere and save it, or right-click the map.",
-          )}
+          {inspectionOnly
+            ? "当前地图版本还没有已保存巡检点。可在地图上选点后保存，再到巡检任务规划配置业务动作。"
+            : t(
+                "No saved waypoints yet — drive somewhere and save it, or right-click the map.",
+              )}
         </p>
       ) : (
         <div className="flex flex-wrap gap-1.5">
-          {waypoints.map((wp) => (
+          {visibleWaypoints.map((wp) => (
             <div
               key={wp.id}
               className="flex items-center gap-1.5 rounded-lg border border-borderSubtle bg-bgSurface px-2 py-1 text-xs"

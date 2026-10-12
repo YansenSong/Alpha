@@ -152,16 +152,23 @@ private:
     neupan_arrived_ = false;
     arrival_stamp_.reset();
     state_entered_at_ = now();
+    rule_replan_pending_ = false;
 
     transitionTo(State::PLANNING, "new goal received; waiting for global plan");
   }
 
   void onPlanningStatus(const std_msgs::msg::String::SharedPtr msg)
   {
+    if (msg->data == "rule_replan_pending") {
+      rule_replan_pending_ = true;
+      transitionTo(State::PLANNING, "rule_replan_pending; vehicle held");
+      return;
+    }
     if (msg->data == "planning") {
       return;
     }
     if (msg->data == "succeeded") {
+      rule_replan_pending_ = false;
       if (state_ == State::PLANNING) {
         state_entered_at_ = now();
         transitionTo(State::MOVING, "global plan available; navigation active");
@@ -181,13 +188,7 @@ private:
 
   void onPlan(const nav_msgs::msg::Path::SharedPtr msg)
   {
-    if (state_ != State::PLANNING || msg->poses.empty()) {
-      return;
-    }
-
-    arrival_candidate_since_.reset();
-    state_entered_at_ = now();
-    transitionTo(State::MOVING, "global plan available; navigation active");
+    (void)msg;  // Execution begins only after the controller installs the validated path.
   }
 
   void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -217,7 +218,7 @@ private:
   {
     const auto current = now();
     if (state_ == State::PLANNING) {
-      if (state_entered_at_ &&
+      if (!rule_replan_pending_ && state_entered_at_ &&
         (current - *state_entered_at_).seconds() > planning_timeout_)
       {
         transitionTo(State::FAILED, "failed: global planning timed out");
@@ -299,6 +300,7 @@ private:
   std::optional<rclcpp::Time> arrival_stamp_;
   std::optional<rclcpp::Time> state_entered_at_;
   bool neupan_arrived_{false};
+  bool rule_replan_pending_{false};
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr plan_sub_;

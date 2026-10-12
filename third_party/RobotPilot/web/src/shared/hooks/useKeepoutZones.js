@@ -14,6 +14,9 @@ export default function useKeepoutZones() {
   const [awaitingMapRules, setAwaitingMapRules] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState("");
+  const [application, setApplication] = useState("IDLE");
+  const [speedControl, setSpeedControl] = useState(null);
+  const storedVersionRef = useRef(null);
   const commandRef = useRef(null);
   const pendingRef = useRef(null);
   const catalogMapRef = useRef("");
@@ -48,6 +51,11 @@ export default function useKeepoutZones() {
     const ackTopic = new window.ROSLIB.Topic({
       ros,
       name: "/area_rules/ack",
+      messageType: "std_msgs/String",
+    });
+    const controlTopic = new window.ROSLIB.Topic({
+      ros,
+      name: "/area_rules/control",
       messageType: "std_msgs/String",
     });
     const commandTopic = new window.ROSLIB.Topic({
@@ -85,6 +93,9 @@ export default function useKeepoutZones() {
           return;
         }
         setSnapshot(next);
+        if (storedVersionRef.current !== null && next.version >= storedVersionRef.current) {
+          setApplication(next.version === storedVersionRef.current && next.navigation_applied ? "APPLIED" : "STORED");
+        }
         setObservedAt(new Date().toISOString());
         setAwaitingMapRules(false);
         setError("");
@@ -99,13 +110,27 @@ export default function useKeepoutZones() {
         if (ack.request_id !== pendingRef.current) return;
         pendingRef.current = null;
         setError(ack.ok ? "" : ack.error || "地图规则保存失败");
+        if (ack.ok) {
+          storedVersionRef.current = ack.stored_version;
+          setApplication("STORED");
+        } else {
+          setApplication("FAILED");
+        }
       } catch {
         // Ignore unrelated or malformed acknowledgements.
+      }
+    });
+    controlTopic.subscribe((message) => {
+      try {
+        setSpeedControl({ ...JSON.parse(message.data), observedAt: Date.now() });
+      } catch {
+        setSpeedControl(null);
       }
     });
     return () => {
       stateTopic.unsubscribe();
       ackTopic.unsubscribe();
+      controlTopic.unsubscribe();
       catalogTopic.unsubscribe();
       commandRef.current = null;
       pendingRef.current = null;
@@ -128,6 +153,7 @@ export default function useKeepoutZones() {
         return false;
       }
       setError("");
+      setApplication("PENDING");
       const requestId = `web-area-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2)}`;
@@ -137,6 +163,8 @@ export default function useKeepoutZones() {
           data: JSON.stringify({
             request_id: requestId,
             map_key: snapshot.map_key,
+            map_id: snapshot.map_id,
+            map_version_id: snapshot.map_version_id,
             expected_version: snapshot.version,
             action,
             rule,
@@ -148,6 +176,7 @@ export default function useKeepoutZones() {
         if (pendingRef.current === requestId) {
           pendingRef.current = null;
           setError("未收到机器人确认，请检查连接和规则列表");
+          setApplication("FAILED");
         }
       }, 5000);
       return true;
@@ -168,6 +197,16 @@ export default function useKeepoutZones() {
       !observedAt ||
       now - Date.parse(observedAt) > 5000,
     error,
+    application,
+    navigationApplied: Boolean(snapshot?.navigation_applied) && snapshotFresh,
+    navigationHold: Boolean(snapshot?.navigation_hold) || !snapshotFresh,
+    navigationHoldReason: snapshot?.navigation_hold_reason || "WAITING_RULES",
+    configuredSpeedLimit: now - (speedControl?.observedAt || 0) <= 500
+      ? speedControl?.configured_speed_limit_mps ?? null : null,
+    constrainedSpeedLimit: now - (speedControl?.observedAt || 0) <= 500
+      ? speedControl?.speed_limit ?? null : null,
+    actualSpeed: now - (speedControl?.observedAt || 0) <= 500
+      ? speedControl?.actual_speed_mps ?? null : null,
     canEdit: editAccess.allowed,
     permissionReason: editAccess.reason,
     upsertRule: (rule) => send("upsert", rule),

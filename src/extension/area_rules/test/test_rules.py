@@ -7,7 +7,7 @@ import unittest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from area_rules.rules import (RuleStore, covers, grid_to_world, map_key,
+from area_rules.rules import (RuleStore, covers, grid_to_world, map_key, occupancy_map_id,
                                         rasterize, validate_rule)
 
 
@@ -43,6 +43,17 @@ class RuleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "rules changed"):
                 second.mutate("map-a", 0, "delete", {"id": "a"})
             self.assertNotEqual(map_key(grid()), map_key(grid(math.pi / 3)))
+            self.assertEqual(len(occupancy_map_id(grid())), 12)
+            self.assertNotEqual(occupancy_map_id(grid()), occupancy_map_id(grid(math.pi / 3)))
+
+    def test_temporary_closure_duration_uses_robot_clock_and_persists_expiry(self):
+        rule = validate_rule({"id": "work", "type": "closure", "cx": 1, "cy": 2,
+                              "w": 1, "h": 1, "duration_seconds": 60})
+        self.assertIn("expires_at", rule)
+        self.assertNotIn("duration_seconds", rule)
+        with self.assertRaisesRegex(ValueError, "duration"):
+            validate_rule({"id": "bad", "type": "closure", "cx": 1, "cy": 2,
+                           "w": 1, "h": 1, "duration_seconds": 0})
 
     def test_invalid_limits_do_not_enter_store(self):
         with self.assertRaisesRegex(ValueError, "speed limit"):

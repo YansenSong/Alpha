@@ -42,6 +42,10 @@ vi.mock("../shared/hooks/useSavedWaypoints", () => ({ default: () => ({
 }) }));
 vi.mock("../shared/hooks/useKeepoutZones", () => ({ default: () => ({}) }));
 vi.mock("../shared/api/apiFetch", () => ({ apiFetch: state.apiFetch }));
+vi.mock("../shared/inspection/planningApi", () => ({
+  listInspectionMissions: vi.fn(async () => []),
+  startInspectionMission: vi.fn(),
+}));
 vi.mock("../components/Map", () => ({ default: () => <div data-testid="map-canvas" /> }));
 vi.mock("../components/Camera", () => ({ default: () => null }));
 vi.mock("../components/Joystick", () => ({ default: () => null }));
@@ -50,7 +54,10 @@ vi.mock("../components/NavStatus", () => ({ default: () => null }));
 vi.mock("../components/MapLayers", () => ({ default: () => null }));
 vi.mock("../components/SystemAlerts", () => ({ default: () => null }));
 vi.mock("../components/WaypointLibrary", () => ({ default: () => null }));
-vi.mock("../shared/ui/Dashboard", () => ({ MetricCard: () => null }));
+vi.mock("../shared/ui/Dashboard", () => ({
+  MetricCard: () => null,
+  DashboardCard: ({ children, ...props }) => <section {...props}>{children}</section>,
+}));
 
 import MapPage from "./MapPage";
 
