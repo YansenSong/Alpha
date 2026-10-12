@@ -1,27 +1,28 @@
 import { T, useT } from "../shared/i18n/i18n";
 import React, { useEffect, useRef, useState } from "react";
-import { useRos } from "../app/App";
+import { useRos, useRosStatus } from "../app/App";
 
 const MAX_MESSAGES = 50;
 
 /**
- * "Echo any topic by name" — the browser equivalent of `ros2 topic echo`.
- * The operator types a topic (and optionally its message type), and we open a
- * rosbridge subscription and stream the raw JSON messages. Message type is
- * optional: rosbridge can resolve it for an existing topic, but supplying it
- * avoids a lookup and works for topics that aren't advertised yet.
+ * Browse the current ROS graph and stream raw JSON messages from a selected
+ * topic, similar to `ros2 topic echo`.
  */
 const TopicEcho = () => {
   const { t } = useT();
   const ros = useRos();
+  const rosStatus = useRosStatus();
   const [topicName, setTopicName] = useState("");
-  const [msgType, setMsgType] = useState("");
+  const [topics, setTopics] = useState([]);
+  const [topicsStatus, setTopicsStatus] = useState("loading");
+  const [topicsRefresh, setTopicsRefresh] = useState(0);
   const [active, setActive] = useState(null); // { name, type }
   const [messages, setMessages] = useState([]);
   const [count, setCount] = useState(0);
 
   const topicRef = useRef(null);
   const seqRef = useRef(0);
+  const selectedTopic = topics.find((topic) => topic.name === topicName);
 
   const stop = () => {
     if (topicRef.current) {
@@ -37,19 +38,68 @@ const TopicEcho = () => {
 
   useEffect(() => stop, []); // unsubscribe on unmount
 
+  useEffect(() => {
+    if (!ros || rosStatus !== "connected") {
+      setTopics([]);
+      setTopicName("");
+      setTopicsStatus("offline");
+      return undefined;
+    }
+
+    if (typeof ros.getTopics !== "function") {
+      setTopics([]);
+      setTopicsStatus("error");
+      return undefined;
+    }
+
+    let cancelled = false;
+    setTopicsStatus("loading");
+    ros.getTopics(
+      (result) => {
+        if (cancelled) return;
+        const names = Array.isArray(result?.topics) ? result.topics : [];
+        const types = Array.isArray(result?.types) ? result.types : [];
+        const byName = new Map();
+        names.forEach((name, index) => {
+          if (typeof name !== "string" || !name.startsWith("/")) return;
+          byName.set(name, {
+            name,
+            type: typeof types[index] === "string" ? types[index] : "",
+          });
+        });
+        const availableTopics = [...byName.values()].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        setTopics(availableTopics);
+        setTopicName((current) =>
+          availableTopics.some((topic) => topic.name === current) ? current : "",
+        );
+        setTopicsStatus(availableTopics.length ? "ready" : "empty");
+      },
+      () => {
+        if (cancelled) return;
+        setTopics([]);
+        setTopicName("");
+        setTopicsStatus("error");
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ros, rosStatus, topicsRefresh]);
+
   const start = () => {
-    const name = topicName.trim();
-    if (!ros || !window.ROSLIB || !name) return;
+    if (!ros || !window.ROSLIB || !selectedTopic) return;
     stop();
     setMessages([]);
     setCount(0);
     seqRef.current = 0;
 
-    const type = msgType.trim();
+    const { name, type } = selectedTopic;
     const topic = new window.ROSLIB.Topic({
       ros,
       name,
-      // roslibjs tolerates an empty type on subscribe; rosbridge resolves it.
       messageType: type || undefined,
     });
 
@@ -79,24 +129,44 @@ const TopicEcho = () => {
         <p className="w-full text-[11px] text-themeTextGray">
           <T>
             {
-              "For advanced troubleshooting only — ask your integrator for the exact topic names to type here."
+              "Select a currently active topic to inspect its messages."
             }
           </T>{" "}
         </p>
-        <input
+        <select
           value={topicName}
           onChange={(e) => setTopicName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && start()}
-          placeholder="/topic_name"
-          className="min-w-[140px] flex-1 rounded-lg border border-borderSubtle bg-bgCard px-2 py-1 text-xs text-textWhiteHover placeholder:text-themeTextGray"
-        />
-        <input
-          value={msgType}
-          onChange={(e) => setMsgType(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && start()}
-          placeholder={t("msg type (optional)")}
-          className="w-40 rounded-lg border border-borderSubtle bg-bgCard px-2 py-1 text-xs text-textWhiteHover placeholder:text-themeTextGray"
-        />
+          disabled={Boolean(active) || topicsStatus !== "ready"}
+          aria-label={t("Topic name")}
+          className="min-w-0 flex-1 rounded-lg border border-borderSubtle bg-bgCard px-2 py-1 text-xs text-textWhiteHover disabled:opacity-60"
+        >
+          <option value="">
+            {topicsStatus === "offline"
+              ? t("ROS bridge is disconnected")
+              : topicsStatus === "loading"
+              ? t("Loading available topics…")
+              : topicsStatus === "error"
+              ? t("Topic list unavailable")
+              : topicsStatus === "empty"
+              ? t("No active topics found")
+              : t("Select a topic")}
+          </option>
+          {topics.map((topic) => (
+            <option key={topic.name} value={topic.name}>
+              {topic.name}{topic.type ? ` · ${topic.type}` : ""}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setTopicsRefresh((current) => current + 1)}
+          disabled={rosStatus !== "connected" || topicsStatus === "loading"}
+          aria-label={t("Refresh topics")}
+          title={t("Refresh topics")}
+          className="rounded-lg border border-borderSubtle px-2 py-1 text-xs text-themeTextGray transition-colors hover:border-themeBlue hover:text-themeBlue disabled:opacity-50"
+        >
+          <T>{"Refresh topics"}</T>{" "}
+        </button>
         {active ? (
           <button
             onClick={stop}
@@ -106,18 +176,20 @@ const TopicEcho = () => {
           </button>
         ) : (
           <button
+            type="button"
             onClick={start}
-            className="rounded-lg border border-themeBlue px-3 py-1 text-xs text-themeBlue transition-colors hover:bg-themeBlue hover:text-white"
+            disabled={!selectedTopic}
+            className="rounded-lg border border-themeBlue px-3 py-1 text-xs text-themeBlue transition-colors hover:bg-themeBlue hover:text-white disabled:opacity-50"
           >
             <T>{"Echo"}</T>{" "}
           </button>
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto px-2 py-1 text-xs">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain px-2 py-1 text-xs">
         {!active ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-themeTextGray opacity-50">
-            <T>{"Enter a topic name and press Echo to stream its messages."}</T>{" "}
+            <T>{"Select a topic and press Echo to stream its messages."}</T>{" "}
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center text-themeTextGray opacity-50">
@@ -133,7 +205,7 @@ const TopicEcho = () => {
               <span className="text-[10px] uppercase text-themeTextGray opacity-70">
                 {m.t}
               </span>
-              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-textWhiteHover">
+              <pre className="mt-0.5 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[11px] text-textWhiteHover">
                 {m.body}
               </pre>
             </div>

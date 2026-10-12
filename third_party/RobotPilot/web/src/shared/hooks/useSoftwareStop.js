@@ -3,15 +3,17 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AuthContext, useRos, useRosStatus } from "../../app/App";
 import { hasRole } from "../auth/roleAccess";
 import { AppConfig } from "../constants";
-import { useT } from "../i18n/i18n";
+import { sendStoredMissionCommand } from "../missions/taskApi";
+import useMissionRun from "./useMissionRun";
 
 const STATE_STALE_MS = 3000;
 const ACK_TIMEOUT_MS = 3000;
 
 export const softwareStopCapabilities = (mode, identity) => {
+  const operator = hasRole(mode, identity, "Operator");
   return {
-    requestStop: hasRole(mode, identity, "Operator"),
-    releaseStop: hasRole(mode, identity, "Engineer"),
+    requestStop: operator,
+    releaseStop: operator,
   };
 };
 
@@ -63,17 +65,71 @@ const createRequestId = () =>
 const useSoftwareStop = () => {
   const ros = useRos();
   const rosStatus = useRosStatus();
-  const { mode, identity } = useContext(AuthContext);
-  const { t } = useT();
+  const { mode, identity, robotId = "robot-001" } = useContext(AuthContext);
+  const missionRun = useMissionRun();
   const [robotState, setRobotState] = useState(null);
   const [requestState, setRequestState] = useState(null);
   const [, setFreshnessTick] = useState(0);
   const requestTopicRef = useRef(null);
+  const stopTopicRef = useRef(null);
+  const resumeTaskAfterReleaseRef = useRef(null);
+  const previousMissionReasonRef = useRef(missionRun?.reason || "");
   const acknowledgementTimerRef = useRef(null);
   const capabilities = softwareStopCapabilities(mode, identity);
   const canRequestStop = capabilities.requestStop;
   const canReleaseStop = capabilities.releaseStop;
   const stateFresh = isSoftwareStopStateFresh(robotState);
+  const canResumePausedTask = Boolean(
+    missionRun?.status === "paused" && missionRun?.taskId,
+  );
+
+  const resumeTask = useCallback(
+    (taskId, requestId) => {
+      sendStoredMissionCommand(robotId, {
+        command: "resume",
+        task_id: taskId,
+      }).catch((error) => {
+        setRequestState((current) =>
+          current?.requestId === requestId
+            ? {
+                ...current,
+                status: "rejected",
+                reason: error.message || "The paused task could not be resumed.",
+              }
+            : current,
+        );
+      });
+    },
+    [robotId],
+  );
+
+  useEffect(() => {
+    const reason = String(missionRun?.reason || "").toLowerCase();
+    const previousReason = previousMissionReasonRef.current;
+    previousMissionReasonRef.current = reason;
+    if (
+      reason === "mission manager restarted; resume required" &&
+      previousReason !== reason
+    ) {
+      // Discard any release request that was in flight before the restart.
+      // The operator must click Resume navigation again after reconnection.
+      resumeTaskAfterReleaseRef.current = null;
+    }
+  }, [missionRun?.reason]);
+
+  useEffect(() => {
+    if (
+      rosStatus !== "connected" ||
+      requestState?.action !== "request_release" ||
+      requestState.status !== "confirmed" ||
+      robotState?.active !== false
+    )
+      return;
+    const taskId = resumeTaskAfterReleaseRef.current;
+    if (!taskId) return;
+    resumeTaskAfterReleaseRef.current = null;
+    resumeTask(taskId, requestState.requestId);
+  }, [requestState, robotState?.active, resumeTask, rosStatus]);
 
   useEffect(() => {
     if (!robotState) return undefined;
@@ -97,14 +153,22 @@ const useSoftwareStop = () => {
       name: AppConfig.SOFTWARE_STOP_STATE_TOPIC,
       messageType: "std_msgs/String",
     });
+    const stopTopic = new window.ROSLIB.Topic({
+      ros,
+      name: AppConfig.STOP_TOPIC,
+      messageType: "std_msgs/Bool",
+    });
     requestTopicRef.current = requestTopic;
+    stopTopicRef.current = stopTopic;
     const onState = ({ data }) => {
       const nextState = parseSoftwareStopState(data);
       if (!nextState) return;
       setRobotState(nextState);
       setRequestState((current) => {
-        if (!current || current.requestId !== nextState.request_id)
+        if (!current || !["pending", "unknown"].includes(current.status))
           return current;
+        const expectedActive = current.action === "request_stop";
+        if (nextState.active !== expectedActive) return current;
         if (acknowledgementTimerRef.current) {
           window.clearTimeout(acknowledgementTimerRef.current);
           acknowledgementTimerRef.current = null;
@@ -132,7 +196,9 @@ const useSoftwareStop = () => {
     return () => {
       stateTopic.unsubscribe(onState);
       requestTopic.unadvertise?.();
+      stopTopic.unadvertise?.();
       requestTopicRef.current = null;
+      stopTopicRef.current = null;
       if (acknowledgementTimerRef.current) {
         window.clearTimeout(acknowledgementTimerRef.current);
         acknowledgementTimerRef.current = null;
@@ -141,12 +207,20 @@ const useSoftwareStop = () => {
   }, [ros, rosStatus]);
 
   useEffect(() => {
-    if (rosStatus !== "connected") setRobotState(null);
+    if (rosStatus !== "connected") {
+      setRobotState(null);
+      // A request that did not complete before a disconnect is not fresh
+      // confirmation to resume the task after the robot reconnects.
+      resumeTaskAfterReleaseRef.current = null;
+    }
   }, [rosStatus]);
 
   const request = useCallback(
-    (action, reason = "") => {
-      if (rosStatus !== "connected" || !requestTopicRef.current) {
+    (action) => {
+      if (rosStatus !== "connected" || !stopTopicRef.current) {
+        if (action === "request_release") {
+          resumeTaskAfterReleaseRef.current = null;
+        }
         setRequestState({
           action,
           status: "unknown",
@@ -156,11 +230,15 @@ const useSoftwareStop = () => {
         return null;
       }
       const requestId = createRequestId();
-      setRequestState({ action, status: "pending", requestId, reason: "" });
-      requestTopicRef.current.publish(
-        new window.ROSLIB.Message({
-          data: JSON.stringify({ action, reason, request_id: requestId }),
-        }),
+      setRequestState({
+        action,
+        status: "pending",
+        requestId,
+        reason: "",
+        fromActive: robotState?.active,
+      });
+      stopTopicRef.current.publish(
+        new window.ROSLIB.Message({ data: action === "request_stop" }),
       );
       if (acknowledgementTimerRef.current)
         window.clearTimeout(acknowledgementTimerRef.current);
@@ -174,30 +252,21 @@ const useSoftwareStop = () => {
       }, ACK_TIMEOUT_MS);
       return requestId;
     },
-    [rosStatus],
+    [robotState?.active, rosStatus],
   );
 
   const requestStop = useCallback(() => {
     if (!canRequestStop) return null;
-    return request("request_stop", "Software stop requested from Web HMI");
+    return request("request_stop");
   }, [canRequestStop, request]);
 
   const requestRelease = useCallback(() => {
-    if (
-      !canReleaseStop ||
-      !stateFresh ||
-      !robotState?.active ||
-      !robotState.durable ||
-      robotState.result !== "confirmed"
-    )
-      return null;
-    const confirmed = window.confirm(t("Release software stop confirmation"));
-    if (!confirmed) return null;
-    return request(
-      "request_release",
-      "Engineer confirmed software stop release",
-    );
-  }, [canReleaseStop, request, robotState, stateFresh, t]);
+    if (!canReleaseStop) return null;
+    resumeTaskAfterReleaseRef.current = canResumePausedTask
+      ? missionRun.taskId
+      : null;
+    return request("request_release");
+  }, [canReleaseStop, canResumePausedTask, missionRun?.taskId, request]);
 
   return {
     robotState,
@@ -205,6 +274,7 @@ const useSoftwareStop = () => {
     requestState,
     canRequestStop,
     canReleaseStop,
+    canResumePausedTask,
     requestStop,
     requestRelease,
   };

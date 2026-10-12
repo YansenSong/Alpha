@@ -64,7 +64,7 @@ class AreaRules(Node):
         self.create_subscription(String, "/navigation/rules_status", self.on_navigation_status, 10)
         self.create_subscription(Odometry, self.get_parameter("odom_topic").value, self.on_odom, 10)
         self.create_timer(0.1, self.publish_control)
-        self.create_timer(1.0, self.check_expiry)
+        self.create_timer(0.25, self.check_expiry)
         self.create_timer(1.0, self.publish_state)
         self.publish_state()
         self.get_logger().info(f"area rules loaded from {self.store.path}")
@@ -228,8 +228,12 @@ class AreaRules(Node):
         self.ack_pub.publish(String(data=json.dumps(result)))
 
     def check_expiry(self):
-        if self.key and self.store.expire(self.key):
-            self.rules = self.store.state(self.key)["rules"]
+        if not self.key:
+            return
+        expired = self.store.expire(self.key)
+        current_rules = self.store.state(self.key)["rules"]
+        if expired or current_rules != self.rules:
+            self.rules = current_rules
             self.publish_mask()
             self.publish_state()
 

@@ -80,14 +80,14 @@ describe("software stop state contract", () => {
     ).toBe(false);
   });
 
-  it("matches the Operator stop and Engineer release roles", () => {
+  it("uses Operator permission for stop and navigation recovery", () => {
     expect(softwareStopCapabilities("local", { role: "Viewer" })).toEqual({
       requestStop: false,
       releaseStop: false,
     });
     expect(softwareStopCapabilities("local", { role: "Operator" })).toEqual({
       requestStop: true,
-      releaseStop: false,
+      releaseStop: true,
     });
     expect(softwareStopCapabilities("local", { role: "Engineer" })).toEqual({
       requestStop: true,

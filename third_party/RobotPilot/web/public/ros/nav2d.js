@@ -742,6 +742,9 @@ const ensureGoalMarker = (scene = getScene()) => {
 const bringNavigationOverlaysToFront = (scene = getScene()) => {
   if (!scene) return;
   ensureGoalMarker(scene);
+  // OccupancyGridClient replaces the map image on each update. Keep rule
+  // shapes above the fresh grid instead of letting them disappear behind it.
+  (window.NAV2D.keepoutItems || []).forEach((shape) => scene.addChild(shape));
   if (window.NAV2D.pathShape) scene.addChild(window.NAV2D.pathShape);
   if (window.NAV2D.goalMarkerItem) scene.addChild(window.NAV2D.goalMarkerItem);
   (window.NAV2D.queuedWaypointItems || []).forEach((marker, index) => {

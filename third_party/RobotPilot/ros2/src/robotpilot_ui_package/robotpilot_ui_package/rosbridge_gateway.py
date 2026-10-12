@@ -60,7 +60,7 @@ def required_role(message):
             return {
                 "get_state": "Viewer",
                 "request_stop": "Operator",
-                "request_release": "Engineer",
+                "request_release": "Operator",
             }.get(action)
         if topic in READ_REQUEST_TOPICS:
             return "Viewer"

@@ -24,6 +24,9 @@ const pointer = (target, type, x, y) => {
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(560);
+  vi.spyOn(SVGElement.prototype, "getBoundingClientRect").mockReturnValue({
+    left: 0, top: 0, width: 800, height: 560,
+  });
   window.ROSLIB = { Topic: class {
     subscribe() {}
     unsubscribe() {}
@@ -49,9 +52,18 @@ beforeEach(() => {
       document.getElementById(divID).appendChild(canvas);
       this.scene = {
         canvas,
+        children: [],
+        offsetX: 0,
         globalToRos: (x, y) => ({ x: x / 10, y: y / 10 }),
-        addChild: (shape) => { shape.parent = this.scene; },
-        removeChild: (shape) => { shape.parent = null; },
+        localToGlobal(x, y) { return { x: x * 10 + this.offsetX, y: y * 10 }; },
+        addChild(shape) { shape.parent = this; this.children.push(shape); },
+        removeChild(shape) { this.children = this.children.filter((item) => item !== shape); shape.parent = null; },
+        get numChildren() { return this.children.length; },
+        setChildIndex(shape, index) {
+          this.removeChild(shape);
+          shape.parent = this;
+          this.children.splice(index, 0, shape);
+        },
       };
     }
   } };
@@ -68,7 +80,7 @@ afterEach(() => {
 
 test("drawing mode turns a canvas drag into a robot map rectangle", async () => {
   const onAreaDraw = vi.fn();
-  const { container } = render(<Map drawingArea areaDrawType="keepout"
+  const { container, rerender } = render(<Map drawingArea areaDrawType="keepout"
     onAreaDraw={onAreaDraw} />);
   const canvas = await waitFor(() => {
     const element = container.querySelector("canvas");
@@ -80,4 +92,22 @@ test("drawing mode turns a canvas drag into a robot map rectangle", async () => 
   pointer(canvas, "pointerup", 200, 200);
   expect(onAreaDraw).toHaveBeenCalledWith({ cx: 15, cy: 15, w: 10, h: 10 });
   expect(window.NAV2D.shift).not.toHaveBeenCalled();
+
+  const liveScene = window.NAV2D.canvas.scene;
+  const draft = { type: "keepout", cx: 15, cy: 15, w: 10, h: 10 };
+  rerender(<Map drawingArea={false} areaDrawType="keepout"
+    areaPreview={draft}
+    onAreaDraw={onAreaDraw} />);
+  await waitFor(() => {
+    expect(liveScene.children).toHaveLength(0);
+    expect(container.querySelector("svg rect")?.getAttribute("width")).toBe("100");
+  });
+  const rectangle = container.querySelector("svg rect");
+  const beforePan = Number(rectangle.getAttribute("x"));
+  liveScene.offsetX = 20;
+  await waitFor(() => expect(Number(rectangle.getAttribute("x"))).toBe(beforePan + 20));
+  rerender(<Map drawingArea={false} areaDrawType="keepout"
+    areaPreview={draft} onAreaDraw={onAreaDraw} />);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  expect(container.querySelector("svg rect")).toBe(rectangle);
 });

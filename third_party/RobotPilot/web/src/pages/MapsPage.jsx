@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-import { useRos, useRosStatus } from "../app/App";
-import AreaRulesEditor from "../components/AreaRulesEditor";
+import { AuthContext, useRos, useRosStatus } from "../app/App";
+import { apiFetch } from "../shared/api/apiFetch";
+import SavedMapRulesEditor from "../components/SavedMapRulesEditor";
 import { AppConfig } from "../shared/constants";
 import {
   DashboardCard,
@@ -13,7 +14,6 @@ import {
 } from "../shared/ui/Dashboard";
 import { useT } from "../shared/i18n/i18n";
 import { useRoleAccess } from "../shared/auth/roleAccess";
-import MapQualityReviewPanel from "../components/MapQualityReviewPanel";
 
 // 传输时用下划线代替空格；UI 中显示为空格。
 const toWire = (s) =>
@@ -53,6 +53,7 @@ const matchesActiveMap = (active, selection) =>
  */
 const MapsPage = () => {
   const { t } = useT();
+  const { robotId } = useContext(AuthContext);
   const mapAccess = useRoleAccess("Engineer");
   const ros = useRos();
   const rosStatus = useRosStatus();
@@ -61,9 +62,39 @@ const MapsPage = () => {
   const [groups, setGroups] = useState([]);
   const [projectMaps, setProjectMaps] = useState([]);
   const [active, setActive] = useState({ group: "", map: "", projectMap: "" });
+  const [catalogRevision, setCatalogRevision] = useState(0);
   const [renaming, setRenaming] = useState(null); // {group, map, value}
   const [editingMap, setEditingMap] = useState(null);
-  const [pendingEdit, setPendingEdit] = useState(null);
+
+  useEffect(() => {
+    if (!robotId) return;
+    let activeRequest = true;
+    apiFetch(`/api/v1/robots/${encodeURIComponent(robotId)}/maps/catalog`)
+      .then((response) => response.json())
+      .then((catalog) => {
+        if (!activeRequest) return;
+        setGroups((current) =>
+          connected && current.length
+            ? current
+            : Object.entries(
+                (catalog.maps || []).reduce((result, item) => {
+                  (result[item.group] ||= []).push({
+                    name: item.map,
+                    routes: [],
+                  });
+                  return result;
+                }, {}),
+              ).map(([name, maps]) => ({ name, maps })),
+        );
+        setProjectMaps((current) =>
+          connected && current.length ? current : catalog.project_maps || [],
+        );
+      })
+      .catch(() => {});
+    return () => {
+      activeRequest = false;
+    };
+  }, [robotId, catalogRevision, connected]);
 
   const reqRef = useRef(null);
   const respRef = useRef(null);
@@ -127,7 +158,9 @@ const MapsPage = () => {
       } else if (
         text.startsWith("Map switch failed:") ||
         text.startsWith("Map switch rejected:") ||
-        text.startsWith("MapServer loaded the 2D map, but saving or refreshing") ||
+        text.startsWith(
+          "MapServer loaded the 2D map, but saving or refreshing",
+        ) ||
         text.startsWith("Map rename failed:") ||
         text.startsWith("Group creation failed:") ||
         text.startsWith("Group rename failed:")
@@ -150,7 +183,10 @@ const MapsPage = () => {
     return () => topic.unsubscribe(handler);
   }, [ros, t]);
 
-  const refresh = () => reqRef.current?.publish();
+  const refresh = () => {
+    reqRef.current?.publish();
+    setCatalogRevision((value) => value + 1);
+  };
 
   const sendCmd = (path, data, preserveNames = false) => {
     if (!mapAccess.allowed) {
@@ -158,14 +194,15 @@ const MapsPage = () => {
       return false;
     }
     if (!opRef.current) return false;
-    const wired = data && !preserveNames
-      ? Object.fromEntries(
-          Object.entries(data).map(([k, v]) => [
-            k,
-            typeof v === "string" ? toWire(v) : v,
-          ]),
-        )
-      : data;
+    const wired =
+      data && !preserveNames
+        ? Object.fromEntries(
+            Object.entries(data).map(([k, v]) => [
+              k,
+              typeof v === "string" ? toWire(v) : v,
+            ]),
+          )
+        : data;
     const msg = wired ? `${path}/${JSON.stringify(wired)}` : path;
     opRef.current.publish(new window.ROSLIB.Message({ data: msg }));
     // 后端完成文件操作后会重新发布 nav_data；此处也主动触发一次刷新。
@@ -190,38 +227,8 @@ const MapsPage = () => {
       toast.warn(t(mapAccess.reason));
       return;
     }
-    if (!connected) return;
-    const selection = { group, map, source };
-    if (matchesActiveMap(active, selection)) {
-      setEditingMap(selection);
-      return;
-    }
-    setPendingEdit(selection);
-    if (source === "project") switchProjectMap(map);
-    else switchMap(group, map);
+    setEditingMap({ group, map, source });
   };
-
-  useEffect(() => {
-    if (!pendingEdit || !matchesActiveMap(active, pendingEdit)) return;
-    setEditingMap(pendingEdit);
-    setPendingEdit(null);
-  }, [active, pendingEdit]);
-
-  useEffect(() => {
-    if (!pendingEdit) return undefined;
-    const timer = window.setTimeout(() => {
-      setPendingEdit(null);
-      toast.error("地图未能在 15 秒内加载，请检查机器人状态后重试");
-    }, 15000);
-    return () => window.clearTimeout(timer);
-  }, [pendingEdit]);
-
-  useEffect(() => {
-    if (editingMap && active.group &&
-      !matchesActiveMap(active, editingMap)) {
-      setEditingMap(null);
-    }
-  }, [active, editingMap]);
 
   const deleteMap = (group, map) => {
     if (
@@ -246,8 +253,7 @@ const MapsPage = () => {
         group: renaming.group,
         map_old: renaming.map,
         map_new: next,
-        active:
-          active.group === renaming.group && active.map === renaming.map,
+        active: active.group === renaming.group && active.map === renaming.map,
       });
       if (sent) toast.info(t('Renaming to "{name}"…').replace("{name}", next));
     }
@@ -273,15 +279,24 @@ const MapsPage = () => {
     return (
       <div className="sectionHeight space-y-4 py-4 sm:py-6">
         <ToastContainer position="bottom-right" theme="dark" />
-        <button onClick={() => setEditingMap(null)}
-          className="rounded-lg border border-borderSubtle px-3 py-1.5 text-xs text-themeBlue hover:border-themeBlue">
+        <button
+          onClick={() => setEditingMap(null)}
+          className="rounded-lg border border-borderSubtle px-3 py-1.5 text-xs text-themeBlue hover:border-themeBlue"
+        >
           ← 返回已保存的地图
         </button>
-        <SectionHeader eyebrow="Map rules" title={`编辑地图：${editingMap.map}`}
-          description={editingMap.source === "project"
-            ? `位置：maps/${editingMap.map} · 当前加载地图的规则将在机器人侧保存。`
-            : `分组：${editingMap.group} · 当前加载地图的规则将在机器人侧保存。`} />
-        <DashboardCard className="p-4"><AreaRulesEditor /></DashboardCard>
+        <SectionHeader
+          eyebrow="Map rules"
+          title={`编辑地图：${editingMap.map}`}
+          description={
+            editingMap.source === "project"
+              ? `位置：maps/${editingMap.map} · 直接编辑已保存地图的规则，无需切换运行地图。`
+              : `分组：${editingMap.group} · 直接编辑已保存地图的规则，无需切换运行地图。`
+          }
+        />
+        <DashboardCard className="p-4">
+          <SavedMapRulesEditor selection={editingMap} />
+        </DashboardCard>
       </div>
     );
   }
@@ -302,8 +317,7 @@ const MapsPage = () => {
             />
             <button
               onClick={refresh}
-              disabled={!connected}
-              className="rounded-lg border border-borderSubtle px-3 py-1.5 text-xs text-themeTextGray hover:border-themeBlue hover:text-themeBlue disabled:opacity-40"
+              className="rounded-lg border border-borderSubtle px-3 py-1.5 text-xs text-themeTextGray hover:border-themeBlue hover:text-themeBlue"
             >
               {t("Refresh")}
             </button>
@@ -365,11 +379,10 @@ const MapsPage = () => {
                           </button>
                           <button
                             onClick={() => editMap("maps", m.name, "project")}
-                            disabled={!connected || !m.loadable || Boolean(pendingEdit)}
+                            disabled={!m.loadable}
                             className="rounded-lg border border-borderSubtle px-2 py-1 text-themeBlue hover:border-themeBlue disabled:opacity-40"
                           >
-                            {pendingEdit?.source === "project" && pendingEdit.map === m.name
-                              ? "加载中…" : "编辑"}
+                            编辑
                           </button>
                         </div>
                       </div>
@@ -471,11 +484,9 @@ const MapsPage = () => {
                                 </button>
                                 <button
                                   onClick={() => editMap(group.name, m.name)}
-                                  disabled={!connected || Boolean(pendingEdit)}
                                   className="rounded-lg border border-borderSubtle px-2 py-1 text-themeBlue hover:border-themeBlue disabled:opacity-40"
                                 >
-                                  {pendingEdit?.group === group.name && pendingEdit?.map === m.name
-                                    ? "加载中…" : "编辑"}
+                                  编辑
                                 </button>
                                 <button
                                   onClick={() =>
@@ -509,7 +520,6 @@ const MapsPage = () => {
           </div>
         )}
       </DashboardCard>
-      <MapQualityReviewPanel group={toWire(active.group)} map={toWire(active.map)} />
     </div>
   );
 };

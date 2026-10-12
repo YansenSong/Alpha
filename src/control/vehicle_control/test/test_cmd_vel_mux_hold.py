@@ -1,4 +1,4 @@
-"""Mission hold must never clear an operator's independent stop request."""
+"""Mission hold and the independently controlled /stop latch stay separate."""
 
 import importlib.util
 import json
@@ -132,12 +132,12 @@ class MissionHoldTest(unittest.TestCase):
             MODULE.CmdVelMux.timer_callback(mux)
             self.assertEqual(mux.pub.messages[-1].twist.linear.x, 0.0)
 
-    def test_legacy_false_cannot_release_persistent_stop(self):
+    def test_stop_false_releases_persistent_stop(self):
         mux = FakeMux()
         MODULE.CmdVelMux.stop_callback(mux, Bool(data=True))
         MODULE.CmdVelMux.stop_callback(mux, Bool(data=False))
-        self.assertTrue(mux.stop_requested)
-        self.assertTrue(json.loads(mux.software_stop_state_file.read_text())["active"])
+        self.assertFalse(mux.stop_requested)
+        self.assertFalse(json.loads(mux.software_stop_state_file.read_text())["active"])
 
     def test_stop_latch_survives_mux_restart(self):
         mux = FakeMux()
@@ -169,7 +169,7 @@ class MissionHoldTest(unittest.TestCase):
         self.assertFalse(mux.software_stop_state["durable"])
         self.assertEqual(mux.software_stop_state["result"], "degraded")
 
-    def test_release_is_rejected_while_motion_command_is_fresh(self):
+    def test_release_succeeds_while_motion_command_is_fresh(self):
         mux = FakeMux()
         mux.area_rules_required = False
         MODULE.CmdVelMux.set_software_stop(
@@ -182,11 +182,10 @@ class MissionHoldTest(unittest.TestCase):
             "action": "request_release", "request_id": "release-1"
         }))
         MODULE.CmdVelMux.software_stop_request_callback(mux, request)
-        self.assertTrue(mux.stop_requested)
-        self.assertEqual(mux.software_stop_state["result"], "rejected")
-        self.assertEqual(mux.software_stop_state["reason"], "Manual velocity command is active")
+        self.assertFalse(mux.stop_requested)
+        self.assertEqual(mux.software_stop_state["result"], "confirmed")
 
-    def test_release_requires_fresh_area_safety_when_configured(self):
+    def test_release_does_not_require_area_safety_precheck(self):
         mux = FakeMux()
         MODULE.CmdVelMux.set_software_stop(
             mux, active=True, source="test", reason="stop", request_id="stop-1"
@@ -195,13 +194,13 @@ class MissionHoldTest(unittest.TestCase):
             "action": "request_release", "request_id": "release-1"
         }))
         MODULE.CmdVelMux.software_stop_request_callback(mux, request)
-        self.assertTrue(mux.stop_requested)
-        self.assertEqual(mux.software_stop_state["reason"], "Area safety status is unavailable or stale")
+        self.assertFalse(mux.stop_requested)
+        self.assertEqual(mux.software_stop_state["result"], "confirmed")
 
-    def test_task_hold_and_area_stop_each_block_release(self):
-        for hold, area_json, expected_reason in (
-            (True, '{"ready": true, "stop": false}', "Task hold is active"),
-            (False, '{"ready": true, "stop": true}', "Area stop is active"),
+    def test_task_hold_and_area_stop_do_not_block_stop_release(self):
+        for hold, area_json in (
+            (True, '{"ready": true, "stop": false}'),
+            (False, '{"ready": true, "stop": true}'),
         ):
             mux = FakeMux()
             mux.mission_hold_requested = hold
@@ -215,8 +214,8 @@ class MissionHoldTest(unittest.TestCase):
                     "action": "request_release", "request_id": "release-1"
                 })),
             )
-            self.assertTrue(mux.stop_requested)
-            self.assertEqual(mux.software_stop_state["reason"], expected_reason)
+            self.assertFalse(mux.stop_requested)
+            self.assertEqual(mux.software_stop_state["result"], "confirmed")
 
     def test_state_query_returns_correlated_robot_state(self):
         mux = FakeMux()

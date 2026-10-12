@@ -8,13 +8,19 @@ import React, {
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-import { AuthContext, useRos, useRosStatus, useRuntimeConfig } from "../app/App";
+import {
+  AuthContext,
+  useRos,
+  useRosStatus,
+  useRuntimeConfig,
+} from "../app/App";
 import { useRoleAccess } from "../shared/auth/roleAccess";
 import { AppConfig } from "../shared/constants";
 
 import Map from "../components/Map";
 import Camera from "../components/Camera";
 import Joystick from "../components/Joystick";
+import SoftwareStopActionButton from "../components/SoftwareStopActionButton";
 import RobotState from "../components/RobotState";
 import { MetricCard } from "../shared/ui/Dashboard";
 import NavStatus from "../components/NavStatus";
@@ -45,9 +51,14 @@ const MapPage = () => {
   const { robotId, robotMode } = useContext(AuthContext);
   const activeMission = useMissionRun();
   const robotStatus = useRobotStatus();
-  const missionIsActive = [activeMission?.status, robotStatus.snapshot?.task?.status]
+  const missionIsActive = [
+    activeMission?.status,
+    robotStatus.snapshot?.task?.status,
+  ]
     .filter(Boolean)
-    .some((status) => ["running", "paused"].includes(String(status).toLowerCase()));
+    .some((status) =>
+      ["running", "paused"].includes(String(status).toLowerCase()),
+    );
   const { t } = useT();
   const navigationAccess = useRoleAccess("Operator");
   const localizationAccess = useRoleAccess("Engineer");
@@ -58,20 +69,23 @@ const MapPage = () => {
   const localizationAccessRef = useRef(localizationAccess);
   localizationAccessRef.current = localizationAccess;
   const softwareStop = useSoftwareStop();
+  const softwareStopActive = softwareStop.robotState?.active === true;
+  const resumeNavigationAvailable =
+    softwareStopActive || softwareStop.canResumePausedTask;
   const manualDisabledReason =
     robotMode !== "simulation"
       ? t("Manual control is available in simulation mode only.")
       : rosStatus !== "connected"
-        ? t("Robot connection is offline!")
-        : !manualAccess.allowed
-          ? t(manualAccess.reason)
-          : !softwareStop.stateFresh || softwareStop.robotState?.active !== false
-            ? t("Software stop state is unknown or active.")
-            : ["pending", "unknown"].includes(softwareStop.requestState?.status)
-              ? t("Software stop request is pending.")
-              : missionIsActive
-                ? t("Stop the active task before manual control.")
-                : "";
+      ? t("Robot connection is offline!")
+      : !manualAccess.allowed
+      ? t(manualAccess.reason)
+      : !softwareStop.stateFresh || softwareStop.robotState?.active !== false
+      ? t("Software stop state is unknown or active.")
+      : ["pending", "unknown"].includes(softwareStop.requestState?.status)
+      ? t("Software stop request is pending.")
+      : missionIsActive
+      ? t("Stop the active task before manual control.")
+      : "";
   const manualEnabled = !INSPECTION_PROFILE && !manualDisabledReason;
   const softwareStopRef = useRef(softwareStop);
   softwareStopRef.current = softwareStop;
@@ -87,7 +101,8 @@ const MapPage = () => {
   const mapRef = useRef(null);
   const [businessAlerts, setBusinessAlerts] = useState([]);
   const alertMapId = robotStatus.snapshot?.current_map?.map_id || "";
-  const alertMapVersionId = robotStatus.snapshot?.current_map?.map_version_id || "";
+  const alertMapVersionId =
+    robotStatus.snapshot?.current_map?.map_version_id || "";
   const displayedMapIdentity = `${alertMapId}:${alertMapVersionId}`;
   const displayedMapIdentityRef = useRef(displayedMapIdentity);
 
@@ -100,10 +115,15 @@ const MapPage = () => {
     }
     let active = true;
     const refresh = async () => {
-      const query = new URLSearchParams({ map_id: alertMapId, map_version_id: alertMapVersionId });
+      const query = new URLSearchParams({
+        map_id: alertMapId,
+        map_version_id: alertMapVersionId,
+      });
       try {
         const response = await apiFetch(
-          `/api/v1/robots/${encodeURIComponent(robotId || "")}/inspection/alerts?${query}`,
+          `/api/v1/robots/${encodeURIComponent(
+            robotId || "",
+          )}/inspection/alerts?${query}`,
         );
         const payload = await response.json();
         if (active) {
@@ -129,9 +149,13 @@ const MapPage = () => {
   useEffect(() => {
     if (!INSPECTION_PROFILE || !window.NAV2D) return undefined;
     window.NAV2D._inspectionAlertClickCallback = (alertId) => {
-      window.location.href = `/route?alert_id=${encodeURIComponent(alertId)}#inspection-records`;
+      window.location.href = `/route?alert_id=${encodeURIComponent(
+        alertId,
+      )}#inspection-records`;
     };
-    return () => { window.NAV2D._inspectionAlertClickCallback = null; };
+    return () => {
+      window.NAV2D._inspectionAlertClickCallback = null;
+    };
   }, []);
 
   // mode: null | 'goal' | 'pose' | 'waypoint'
@@ -194,7 +218,6 @@ const MapPage = () => {
   }, [waypointQueue, activeWaypointIndex, completedWaypointCount]);
 
   const initialPoseTopic = useRef(null);
-  const navCancelService = useRef(null);
   const pendingInitialPoseRef = useRef(false);
 
   useEffect(() => {
@@ -204,12 +227,6 @@ const MapPage = () => {
       ros,
       name: AppConfig.INITIAL_POSE_TOPIC,
       messageType: "geometry_msgs/PoseWithCovarianceStamped",
-    });
-
-    navCancelService.current = new window.ROSLIB.Service({
-      ros,
-      name: AppConfig.NAV_CANCEL_GOAL_SERVICE,
-      serviceType: "action_msgs/CancelGoal",
     });
 
     const localizationTopic = new window.ROSLIB.Topic({
@@ -230,7 +247,17 @@ const MapPage = () => {
     async (steps, name) => {
       if (INSPECTION_PROFILE) return;
       if (missionIsActive) {
-        toast.warn(t("Another task is already active."));
+        const paused = [
+          activeMission?.status,
+          robotStatus.snapshot?.task?.status,
+        ].some((status) => String(status || "").toLowerCase() === "paused");
+        toast.warn(
+          t(
+            paused
+              ? "A task is paused. Use Resume navigation to continue it."
+              : "Another task is already active.",
+          ),
+        );
         return false;
       }
       if (!navigationSafetyReady()) {
@@ -259,7 +286,15 @@ const MapPage = () => {
         return false;
       }
     },
-    [missionIsActive, robotId, waypointMapId, waypointMapVersionId, t],
+    [
+      activeMission?.status,
+      missionIsActive,
+      robotId,
+      robotStatus.snapshot?.task?.status,
+      waypointMapId,
+      waypointMapVersionId,
+      t,
+    ],
   );
 
   const toPoseStep = (pose, waypointName = "") => ({
@@ -468,34 +503,15 @@ const MapPage = () => {
       installCallback();
   }, [mode, installCallback]);
 
-  const cancelGoal = useCallback(() => {
-    navCancelService.current?.callService(
-      new window.ROSLIB.ServiceRequest({
-        goal_info: {
-          goal_id: { uuid: new Array(16).fill(0) },
-          stamp: { sec: 0, nanosec: 0 },
-        },
-      }),
-      () => {},
-      () => {},
-    );
-    window.NAV2D?.clearGoalPose?.();
-  }, []);
-
-  const emergencyStop = useCallback(() => {
-    setWaypointQueue([]);
-    setActiveWaypointIndex(-1);
-    setCompletedWaypointCount(0);
+  const requestSoftwareStop = useCallback(() => {
     softwareStop.requestStop();
-    cancelGoal();
     addEvent({
       type: "safety",
       severity: "warning",
-      message:
-        "Software stop requested (map page); awaiting robot confirmation",
+      message: "Software stop requested from map page",
     });
-    toast.warn(t("Software stop requested; waiting for robot confirmation"));
-  }, [cancelGoal, softwareStop, t]);
+    toast.warn(t("Software stop requested; navigation task is retained"));
+  }, [softwareStop, t]);
 
   const sendHome = useCallback(() => {
     if (INSPECTION_PROFILE) return;
@@ -580,20 +596,96 @@ const MapPage = () => {
       <div className="flex min-h-[calc(100vh-145px)] min-w-0 flex-col gap-3 py-3">
         {!INSPECTION_PROFILE && <SystemAlerts />}
         {INSPECTION_PROFILE && (
-          <section aria-label="运行总览" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">机器人</p><strong>{robotStatus.snapshot?.robot_connection?.online ? "在线" : "离线/未知"}</strong><p className="text-xs">{robotStatus.stale ? "状态数据已过期" : robotStatus.snapshot?.robot_connection?.source || robotMode}</p></div>
-            <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">任务</p><strong>{robotStatus.snapshot?.task?.status || "空闲/未知"}</strong><p className="text-xs">{robotStatus.snapshot?.task?.taskId || robotStatus.snapshot?.task?.task_id || "无当前任务"}</p>{robotStatus.snapshot?.task?.active_action && <p className="mt-1 text-xs text-themeBlue">{robotStatus.snapshot.task.active_action.kind} · {robotStatus.snapshot.task.active_action.status}</p>}</div>
-            <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">电量</p><strong>{robotStatus.snapshot?.battery?.available && robotStatus.snapshot?.battery?.percent != null ? `${robotStatus.snapshot.battery.percent}%` : "未知"}</strong><p className="text-xs">{robotStatus.snapshot?.battery?.source || "unavailable"}</p></div>
-            <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">地图与安全</p><strong>{robotStatus.snapshot?.current_map?.map_id || "地图未知"}</strong><p className="text-xs">{robotStatus.snapshot?.autonomy_ready ? "安全门禁就绪" : "门禁未确认"}</p></div>
-            <div className="dashboard-card p-3"><p className="text-xs text-themeTextGray">地图内业务告警</p><strong>{robotStatus.stale ? "未知" : businessAlerts.filter((item) => item.state !== "CLOSED").length}</strong><p className="truncate text-xs">{robotStatus.stale ? "地图状态过期" : businessAlerts[0]?.category || "暂无当前版本告警"}</p></div>
+          <section
+            aria-label="运行总览"
+            className="grid grid-cols-2 gap-2 sm:grid-cols-5"
+          >
+            <div className="dashboard-card p-3">
+              <p className="text-xs text-themeTextGray">机器人</p>
+              <strong>
+                {robotStatus.snapshot?.robot_connection?.online
+                  ? "在线"
+                  : "离线/未知"}
+              </strong>
+              <p className="text-xs">
+                {robotStatus.stale
+                  ? "状态数据已过期"
+                  : robotStatus.snapshot?.robot_connection?.source || robotMode}
+              </p>
+            </div>
+            <div className="dashboard-card p-3">
+              <p className="text-xs text-themeTextGray">任务</p>
+              <strong>
+                {robotStatus.snapshot?.task?.status || "空闲/未知"}
+              </strong>
+              <p className="text-xs">
+                {robotStatus.snapshot?.task?.taskId ||
+                  robotStatus.snapshot?.task?.task_id ||
+                  "无当前任务"}
+              </p>
+              {robotStatus.snapshot?.task?.active_action && (
+                <p className="mt-1 text-xs text-themeBlue">
+                  {robotStatus.snapshot.task.active_action.kind} ·{" "}
+                  {robotStatus.snapshot.task.active_action.status}
+                </p>
+              )}
+            </div>
+            <div className="dashboard-card p-3">
+              <p className="text-xs text-themeTextGray">电量</p>
+              <strong>
+                {robotStatus.snapshot?.battery?.available &&
+                robotStatus.snapshot?.battery?.percent != null
+                  ? `${robotStatus.snapshot.battery.percent}%`
+                  : "未知"}
+              </strong>
+              <p className="text-xs">
+                {robotStatus.snapshot?.battery?.source || "unavailable"}
+              </p>
+            </div>
+            <div className="dashboard-card p-3">
+              <p className="text-xs text-themeTextGray">地图与安全</p>
+              <strong>
+                {robotStatus.snapshot?.current_map?.map_id || "地图未知"}
+              </strong>
+              <p className="text-xs">
+                {robotStatus.snapshot?.autonomy_ready
+                  ? "安全门禁就绪"
+                  : "门禁未确认"}
+              </p>
+            </div>
+            <div className="dashboard-card p-3">
+              <p className="text-xs text-themeTextGray">地图内业务告警</p>
+              <strong>
+                {robotStatus.stale
+                  ? "未知"
+                  : businessAlerts.filter((item) => item.state !== "CLOSED")
+                      .length}
+              </strong>
+              <p className="truncate text-xs">
+                {robotStatus.stale
+                  ? "地图状态过期"
+                  : businessAlerts[0]?.category || "暂无当前版本告警"}
+              </p>
+            </div>
             <div className="col-span-2 flex items-center justify-between rounded-lg border border-statusYellow/40 bg-statusYellow/5 p-3 text-xs text-statusYellow sm:col-span-5">
-              <span>{robotStatus.error || (robotStatus.stale ? "运行状态过期或不可用；卡片不代表实时状态。" : `运行模式：${robotMode || "unknown"}。物理急停状态未由该接口确认。`)}</span>
-              <a className="shrink-0 underline" href="/route#inspection-records">查看巡检结果与告警</a>
+              <span>
+                {robotStatus.error ||
+                  (robotStatus.stale
+                    ? "运行状态过期或不可用；卡片不代表实时状态。"
+                    : `运行模式：${
+                        robotMode || "unknown"
+                      }。物理急停状态未由该接口确认。`)}
+              </span>
+              <a
+                className="shrink-0 underline"
+                href="/route#inspection-records"
+              >
+                查看巡检结果与告警
+              </a>
             </div>
           </section>
         )}
         <MapLayers />
-
         {/* Keep telemetry in a narrow sidebar beside the map on desktop. */}
         <section
           className={`grid min-w-0 grid-cols-1 gap-3 ${
@@ -669,18 +761,35 @@ const MapPage = () => {
                 {manualDisabledReason}
               </p>
             )}
-            <button
-              onClick={emergencyStop}
-              disabled={INSPECTION_PROFILE}
+            <SoftwareStopActionButton
+              active={resumeNavigationAvailable}
+              onClick={
+                resumeNavigationAvailable
+                  ? softwareStop.requestRelease
+                  : requestSoftwareStop
+              }
+              disabled={
+                INSPECTION_PROFILE ||
+                (resumeNavigationAvailable
+                  ? !softwareStop.canReleaseStop ||
+                    softwareStop.requestState?.status === "pending"
+                  : !softwareStop.canRequestStop ||
+                    softwareStop.requestState?.status === "pending")
+              }
               title={
                 INSPECTION_PROFILE
                   ? "Software Stop unavailable: robot interface not configured; not physical E-STOP"
+                  : resumeNavigationAvailable
+                  ? t("Resume navigation and continue the current task")
                   : "Software stop request; not physical E-STOP"
               }
-              className="mt-1 h-9 w-9 shrink-0 rounded-full border-2 border-statusRed bg-statusRed/10 font-[RobotoMono] text-[9px] font-bold leading-none text-statusRed transition-colors hover:bg-statusRed hover:text-white"
             >
-              {INSPECTION_PROFILE ? t("Software Stop") : "STOP"}
-            </button>
+              {INSPECTION_PROFILE
+                ? t("Software Stop")
+                : resumeNavigationAvailable
+                ? t("Resume navigation")
+                : "STOP"}
+            </SoftwareStopActionButton>
           </div>
 
           <div className="min-w-0 sm:col-span-2 lg:col-span-5 [&>div]:h-full">
@@ -713,44 +822,44 @@ const MapPage = () => {
           />
           {!INSPECTION_PROFILE && waypointQueue.length > 0 && (
             <div className="dashboard-card min-w-0 space-y-3 p-3 font-[RobotoMono] sm:col-span-2 sm:p-4 lg:col-span-4">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-wider text-themeTextGray">
-                      {t("Waypoint Queue")} ({waypointQueue.length})
-                    </p>
-                    <button
-                      onClick={() => {
-                        setWaypointQueue([]);
-                        setActiveWaypointIndex(-1);
-                        setCompletedWaypointCount(0);
-                      }}
-                      className="text-xs text-statusRed hover:underline"
-                    >
-                      <T>{"Clear"}</T>
-                    </button>
-                  </div>
-                  <div className="mb-3 flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
-                    {waypointQueue.map((wp, i) => (
-                      <span
-                        key={i}
-                        className={`rounded border px-2 py-0.5 text-xs ${
-                          missionIsActive && i === activeMission?.stepIndex
-                            ? "border-themeBlue bg-themeBlue/20 text-themeBlue"
-                            : "border-borderSubtle text-themeTextGray"
-                        }`}
-                      >
-                        {i + 1}: ({wp.position.x.toFixed(1)},{" "}
-                        {wp.position.y.toFixed(1)}) m
-                      </span>
-                    ))}
-                  </div>
-                  {!missionIsActive && (
-                    <button
-                      onClick={executeQueue}
-                      className="w-full rounded-lg border border-themeBlue bg-themeBlue/10 py-1.5 text-xs font-semibold text-themeBlue hover:bg-themeBlue hover:text-white"
-                    >
-                      <T>{"Execute Queue"}</T>
-                    </button>
-                  )}
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wider text-themeTextGray">
+                  {t("Waypoint Queue")} ({waypointQueue.length})
+                </p>
+                <button
+                  onClick={() => {
+                    setWaypointQueue([]);
+                    setActiveWaypointIndex(-1);
+                    setCompletedWaypointCount(0);
+                  }}
+                  className="text-xs text-statusRed hover:underline"
+                >
+                  <T>{"Clear"}</T>
+                </button>
+              </div>
+              <div className="mb-3 flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
+                {waypointQueue.map((wp, i) => (
+                  <span
+                    key={i}
+                    className={`rounded border px-2 py-0.5 text-xs ${
+                      missionIsActive && i === activeMission?.stepIndex
+                        ? "border-themeBlue bg-themeBlue/20 text-themeBlue"
+                        : "border-borderSubtle text-themeTextGray"
+                    }`}
+                  >
+                    {i + 1}: ({wp.position.x.toFixed(1)},{" "}
+                    {wp.position.y.toFixed(1)}) m
+                  </span>
+                ))}
+              </div>
+              {!missionIsActive && (
+                <button
+                  onClick={executeQueue}
+                  className="w-full rounded-lg border border-themeBlue bg-themeBlue/10 py-1.5 text-xs font-semibold text-themeBlue hover:bg-themeBlue hover:text-white"
+                >
+                  <T>{"Execute Queue"}</T>
+                </button>
+              )}
             </div>
           )}
         </section>

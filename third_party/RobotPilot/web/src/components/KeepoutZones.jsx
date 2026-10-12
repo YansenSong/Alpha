@@ -23,8 +23,15 @@ const LABELS = {
   wall: "虚拟墙",
   closure: "临时封闭区",
 };
-const inputClass =
-  "w-full rounded-lg border border-borderSubtle bg-bgCard px-2 py-1 text-xs text-textWhiteHover placeholder:text-themeTextGray";
+const formatMeters = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? number
+        .toFixed(2)
+        .replace(/\.0+$/, "")
+        .replace(/(\.\d*?)0+$/, "$1")
+    : "—";
+};
 
 const readLegacy = () => {
   try {
@@ -48,6 +55,7 @@ export const KeepoutZonesEditor = ({
   deleteRule,
   canEdit = false,
   permissionReason,
+  section = "all",
 }) => {
   const [form, setForm] = useState(EMPTY);
   const [preview, setPreview] = useState(null);
@@ -55,16 +63,15 @@ export const KeepoutZonesEditor = ({
   const [legacy] = useState(readLegacy);
   const set = (field) => (event) =>
     setForm((old) => ({ ...old, [field]: event.target.value }));
-  const field = (key, placeholder) => (
-    <input
-      key={key}
-      value={form[key]}
-      onChange={set(key)}
-      placeholder={placeholder}
-      inputMode="decimal"
-      className={inputClass}
-      aria-label={placeholder}
-    />
+  const field = (key, label) => (
+    <label key={key} className="workspace-field">
+      <span>{label}</span>
+      <input
+        value={form[key]}
+        onChange={set(key)}
+        inputMode={key === "name" ? "text" : "decimal"}
+      />
+    </label>
   );
 
   const numbers =
@@ -82,7 +89,9 @@ export const KeepoutZonesEditor = ({
       (Number.isFinite(Number(form.limit_mps)) &&
         Number(form.limit_mps) > 0)) &&
     (form.type !== "closure" ||
-      (Number.isFinite(Number(form.minutes)) && Number(form.minutes) > 0 && Number(form.minutes) <= 1440));
+      (Number.isFinite(Number(form.minutes)) &&
+        Number(form.minutes) > 0 &&
+        Number(form.minutes) <= 1440));
 
   const add = () => {
     if (!valid) return;
@@ -106,127 +115,242 @@ export const KeepoutZonesEditor = ({
   const legacyMissing = legacy.filter(
     (old) => !rules.some((rule) => rule.id === `legacy-${old.id}`),
   );
-
-  return (
-    <div className="flex w-full flex-col gap-3 font-[RobotoMono] text-xs">
-      <p className={ready ? "text-themeBlue" : "text-statusYellow"}>
-        {ready && !stale
-          ? `机器人规则在线 · 地图 ${mapKey?.slice(0, 8)} · ${rules.length} 条`
-          : observedAt
-          ? `规则快照已过期 · ${new Date(observedAt).toLocaleString()} · 地图 ${
-              mapKey?.slice(0, 8) || "未知"
-            }`
-          : "等待机器人地图规则服务，当前不可编辑"}
-      </p>
+  const showRules = section !== "coordinates";
+  const showCoordinates = section !== "rules";
+  const coordinateForm = (
+    <>
       {!canEdit && (
-        <p className="text-statusYellow">
-          {permissionReason || "Engineer permission required"}
+        <p className="mt-2 text-xs text-statusYellow">
+          {permissionReason || "需要 Engineer 权限"}
         </p>
       )}
-      {error && (
-        <p role="alert" className="text-statusRed">
-          {error}
-        </p>
-      )}
-      {rules.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {rules.map((rule) => (
-            <div
-              key={rule.id}
-              className="flex items-center justify-between gap-2 rounded-lg border border-borderSubtle px-2 py-1"
-            >
-              <span className="truncate text-textWhiteHover">
-                {LABELS[rule.type]} · {rule.name || rule.id}
-              </span>
-              <span className="text-themeTextGray">
-                {rule.type === "speed"
-                  ? `≤ ${rule.limit_mps} m/s`
-                  : rule.type === "wall"
-                  ? `${rule.width} m 宽`
-                  : `${rule.w}×${rule.h} m`}
-              </span>
-              <span className="shrink-0 text-themeTextGray">
-                机器人规则 ·{" "}
-                {rule.expires_at
-                  ? `有效至 ${new Date(rule.expires_at).toLocaleString()}`
-                  : "长期有效"}
-              </span>
-              <button
-                onClick={() => setDeleteCandidate(rule)}
-                disabled={!ready || !canEdit}
-                aria-label={`删除 ${rule.name || rule.id}`}
-                className="text-statusRed disabled:opacity-40"
-              >
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {deleteCandidate && (
-        <div className="rounded-lg border border-statusRed/50 p-2 text-statusRed">
-          <p>确认删除 {deleteCandidate.name || deleteCandidate.id}？当前导航路径可能需要重新规划。</p>
-          <button className="mr-3 underline" onClick={() => {
-            if (deleteRule(deleteCandidate.id)) setDeleteCandidate(null);
-          }}>确认删除</button>
-          <button className="underline" onClick={() => setDeleteCandidate(null)}>取消</button>
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-        <select
-          value={form.type}
-          onChange={set("type")}
-          className={inputClass}
-          aria-label="规则类型"
-        >
-          {Object.entries(LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        {field("name", "名称")}
+      <p className="mt-1 text-xs leading-5 text-themeTextGray">
+        适用于已知地图坐标的精确录入。普通绘制请使用上方地图。
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+        <label className="workspace-field">
+          <span>规则类型</span>
+          <select value={form.type} onChange={set("type")}>
+            {Object.entries(LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {field("name", "名称（可选）")}
         {form.type === "wall" ? (
           <>
-            {field("x1", "起点 X (m)")}
-            {field("y1", "起点 Y (m)")}
-            {field("x2", "终点 X (m)")}
-            {field("y2", "终点 Y (m)")}
-            {field("width", "墙宽 (m)")}
+            {field("x1", "起点 X（m）")}
+            {field("y1", "起点 Y（m）")}
+            {field("x2", "终点 X（m）")}
+            {field("y2", "终点 Y（m）")}
+            {field("width", "墙宽（m）")}
           </>
         ) : (
           <>
-            {field("cx", "中心 X (m)")}
-            {field("cy", "中心 Y (m)")}
-            {field("w", "宽 (m)")}
-            {field("h", "高 (m)")}
+            {field("cx", "中心 X（m）")}
+            {field("cy", "中心 Y（m）")}
+            {field("w", "宽（m）")}
+            {field("h", "高（m）")}
           </>
         )}
-        {form.type === "speed" && field("limit_mps", "最高速度 (m/s)")}
-        {form.type === "closure" && field("minutes", "封闭时长 (分钟)")}
+        {form.type === "speed" && field("limit_mps", "最高速度（m/s）")}
+        {form.type === "closure" && field("minutes", "封闭时长（分钟）")}
       </div>
       <button
         onClick={add}
         disabled={!ready || !valid || !canEdit}
-        className="self-start rounded-lg border border-themeBlue px-3 py-1 text-themeBlue hover:bg-themeBlue hover:text-white disabled:opacity-40"
+        className="workspace-action workspace-action--primary mt-3 w-full"
       >
         预览规则
       </button>
       {preview && (
-        <div className="rounded-lg border border-themeBlue p-2">
-          <p>待保存：{LABELS[preview.type]} · {preview.name || preview.id}</p>
-          <p className="break-all text-themeTextGray">
-            {preview.type === "wall"
-              ? `(${preview.x1}, ${preview.y1}) → (${preview.x2}, ${preview.y2}) · 墙宽 ${preview.width} m`
-              : `中心 (${preview.cx}, ${preview.cy}) · ${preview.w} × ${preview.h} m`}
+        <div className="mt-3 rounded-lg border border-themeBlue bg-themeBlue/5 p-3">
+          <p className="text-xs font-semibold text-themeBlue">
+            待保存 · 坐标预览
           </p>
-          <button className="mr-3 text-themeBlue underline" onClick={() => {
-            if (upsertRule(preview)) setPreview(null);
-          }}>确认保存并应用</button>
-          <button className="underline" onClick={() => setPreview(null)}>取消</button>
+          <p className="mt-1 text-sm text-textWhiteHover">
+            {LABELS[preview.type]} · {preview.name || "未命名规则"}
+          </p>
+          <p className="mt-1 break-all text-xs text-themeTextGray">
+            {preview.type === "wall"
+              ? `(${formatMeters(preview.x1)}, ${formatMeters(
+                  preview.y1,
+                )}) → (${formatMeters(preview.x2)}, ${formatMeters(
+                  preview.y2,
+                )}) · 墙宽 ${formatMeters(preview.width)} m`
+              : `中心 (${formatMeters(preview.cx)}, ${formatMeters(
+                  preview.cy,
+                )}) · ${formatMeters(preview.w)} × ${formatMeters(
+                  preview.h,
+                )} m`}
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              className="workspace-action workspace-action--primary"
+              onClick={() => {
+                if (upsertRule(preview)) setPreview(null);
+              }}
+            >
+              保存并应用
+            </button>
+            <button
+              className="workspace-action"
+              onClick={() => setPreview(null)}
+            >
+              取消预览
+            </button>
+          </div>
         </div>
       )}
-      {ready && legacyMissing.length > 0 && (
+    </>
+  );
+
+  return (
+    <div className="space-y-4">
+      {section !== "coordinates" && <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span
+          className={`rounded-full px-2 py-1 ${
+            ready && !stale
+              ? "bg-statusGreen/10 text-statusGreen"
+              : "bg-statusYellow/10 text-statusYellow"
+          }`}
+        >
+          {ready && !stale
+            ? "规则服务在线"
+            : observedAt
+            ? "规则快照已过期"
+            : "等待规则服务"}
+        </span>
+        <span className="text-themeTextGray">
+          地图 {mapKey?.slice(0, 8) || "未加载"}
+        </span>
+        {stale && observedAt && (
+          <span className="text-themeTextGray">
+            更新于 {new Date(observedAt).toLocaleString()}
+          </span>
+        )}
+      </div>}
+      {section !== "coordinates" && !canEdit && (
+        <p className="text-xs text-statusYellow">
+          {permissionReason || "需要 Engineer 权限"}
+        </p>
+      )}
+      {section !== "coordinates" && error && (
+        <p role="alert" className="text-xs text-statusRed">
+          {error}
+        </p>
+      )}
+
+      {showRules && <section aria-label="已保存规则">
+        <div className="mb-2 flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-textWhiteHover">
+            已保存规则
+          </h4>
+          <span className="text-xs text-themeTextGray">{rules.length} 条</span>
+        </div>
+        {rules.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-borderSubtle p-4 text-center text-xs text-themeTextGray">
+            当前地图还没有规则。可在地图上绘制，或使用坐标录入卡片。
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {rules.map((rule, index) => (
+              <article
+                key={rule.id}
+                className="rounded-lg border border-borderSubtle bg-bgCard/50 p-3"
+              >
+                <div className="flex min-w-0 items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="mr-2 inline-flex min-h-7 min-w-7 items-center justify-center rounded-full bg-statusRed text-xs font-bold text-white">
+                      {index + 1}
+                    </span>
+                    <span className="inline-flex rounded-md bg-themeBlue/10 px-2 py-1 text-xs font-semibold text-themeBlue">
+                      {LABELS[rule.type] || rule.type}
+                    </span>
+                    <p
+                      className="mt-2 truncate text-sm font-medium text-textWhiteHover"
+                      title={rule.name || rule.id}
+                    >
+                      {rule.name ||
+                        `未命名规则 · ${String(rule.id).slice(0, 8)}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setDeleteCandidate(rule)}
+                    disabled={!ready || !canEdit}
+                    aria-label={`删除 ${rule.name || rule.id}`}
+                    className="workspace-action min-h-11 shrink-0 border-statusRed/40 px-3 text-statusRed disabled:opacity-40"
+                  >
+                    删除
+                  </button>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-themeTextGray">
+                  <span>
+                    {rule.type === "speed"
+                      ? `最高 ${formatMeters(rule.limit_mps)} m/s`
+                      : rule.type === "wall"
+                      ? `墙宽 ${formatMeters(rule.width)} m`
+                      : `${formatMeters(rule.w)} × ${formatMeters(rule.h)} m`}
+                  </span>
+                  <span>
+                    {rule.expires_at
+                      ? `有效至 ${new Date(rule.expires_at).toLocaleString()}`
+                      : "长期有效"}
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>}
+
+      {showRules && deleteCandidate && (
+        <div
+          role="alertdialog"
+          aria-label="确认删除规则"
+          className="rounded-lg border border-statusRed/50 bg-statusRed/5 p-3"
+        >
+          <p className="text-sm font-medium text-textWhiteHover">
+            删除“
+            {deleteCandidate.name ||
+              `未命名规则 · ${String(deleteCandidate.id).slice(0, 8)}`}
+            ”？
+          </p>
+          <p className="mt-1 text-xs text-themeTextGray">
+            当前导航路径可能需要重新规划。
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              className="workspace-action border-statusRed/50 text-statusRed"
+              onClick={() => {
+                if (deleteRule(deleteCandidate.id)) setDeleteCandidate(null);
+              }}
+            >
+              确认删除
+            </button>
+            <button
+              className="workspace-action"
+              onClick={() => setDeleteCandidate(null)}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showCoordinates && (section === "coordinates" ? (
+        coordinateForm
+      ) : (
+        <details className="border-t border-borderSubtle pt-3">
+          <summary className="cursor-pointer py-2 text-sm font-medium text-themeBlue">
+            通过坐标添加规则
+          </summary>
+          {coordinateForm}
+        </details>
+      ))}
+      {showRules && ready && legacyMissing.length > 0 && (
         <div className="rounded-lg border border-statusYellow/40 p-2">
           <p className="mb-1 text-statusYellow">
             此浏览器有 {legacyMissing.length} 条旧禁行区，需要逐条导入机器人。

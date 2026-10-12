@@ -26,6 +26,8 @@
 
   <!-- Runtime Python deps -->
   <exec_depend>python3-flask</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
+  <exec_depend>area_rules</exec_depend>
   <exec_depend>python3-websockets</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-serial</exec_depend>

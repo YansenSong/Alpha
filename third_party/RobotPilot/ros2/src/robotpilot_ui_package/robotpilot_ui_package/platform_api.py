@@ -36,6 +36,7 @@ from .build_info import get_build_info
 from .log_maintenance import prune_expired_logs
 from .route_tasks import list_saved_routes, route_mission
 from .storage_monitor import storage_report
+from .saved_map_editor import saved_map, rule_store_path
 
 PLATFORM_SCHEMA_VERSION = 8
 
@@ -391,25 +392,6 @@ class PlatformStore:
                 );
                 CREATE INDEX IF NOT EXISTS asset_waypoints_waypoint
                     ON asset_waypoints(robot_id, waypoint_id);
-                CREATE TABLE IF NOT EXISTS map_quality_reviews (
-                    robot_id TEXT NOT NULL,
-                    review_id TEXT NOT NULL,
-                    group_name TEXT NOT NULL,
-                    map_name TEXT NOT NULL,
-                    version_id TEXT NOT NULL,
-                    checksum TEXT NOT NULL,
-                    checks_json TEXT NOT NULL,
-                    issues TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'SUBMITTED',
-                    submitted_by TEXT NOT NULL,
-                    reviewed_by TEXT,
-                    review_note TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    reviewed_at TEXT,
-                    PRIMARY KEY (robot_id, review_id)
-                );
-                CREATE INDEX IF NOT EXISTS map_quality_reviews_map
-                    ON map_quality_reviews(robot_id, group_name, map_name, created_at DESC);
                 CREATE TABLE IF NOT EXISTS device_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     robot_id TEXT NOT NULL,
@@ -1858,14 +1840,100 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
         store.finish_command(row["command_id"], "accepted", result)
         return jsonify(result), 202
 
+    def offline_map(group_name, map_name):
+        source = request.args.get("source", "ui")
+        if source not in {"ui", "project"}:
+            abort(400, "Invalid map source.")
+        for name in (group_name, map_name):
+            if not map_name_pattern.fullmatch(name) or name in {".", ".."}:
+                abort(400, "Invalid map name.")
+        root = maps_root()
+        if root is None:
+            abort(503, "Map catalog root is unavailable.")
+        try:
+            return saved_map(root, source, group_name, map_name)
+        except FileNotFoundError:
+            abort(404, "Saved map was not found.")
+        except (ValueError, KeyError, OSError, yaml.YAMLError) as error:
+            abort(409, str(error))
+
+    @app.get(prefix + "/maps/saved/<group_name>/<map_name>")
+    @require_role("Viewer")
+    def platform_saved_map(robot_id, group_name, map_name):
+        item = offline_map(group_name, map_name)
+        return jsonify({key: value for key, value in item.items() if key != "image_png"})
+
+    @app.get(prefix + "/maps/saved/<group_name>/<map_name>/image")
+    @require_role("Viewer")
+    def platform_saved_map_image(robot_id, group_name, map_name):
+        from io import BytesIO
+        item = offline_map(group_name, map_name)
+        return send_file(BytesIO(item["image_png"]), mimetype="image/png")
+
+    @app.get(prefix + "/maps/saved/<group_name>/<map_name>/rules")
+    @require_role("Viewer")
+    def platform_saved_map_rules(robot_id, group_name, map_name):
+        from area_rules.rules import RuleStore
+        item = offline_map(group_name, map_name)
+        return jsonify({"map_key": item["map_key"], "map_id": item["map_id"],
+                        **RuleStore(rule_store_path()).state(item["map_key"])})
+
+    @app.post(prefix + "/maps/saved/<group_name>/<map_name>/rules")
+    @require_role("Engineer")
+    def platform_update_saved_map_rules(robot_id, group_name, map_name):
+        from area_rules.rules import RuleStore
+        item = offline_map(group_name, map_name)
+        store_rules = RuleStore(rule_store_path())
+        key = item["map_key"]
+        body = request.get_json(silent=True) or {}
+        if body.get("map_key") != key:
+            abort(409, "Saved map changed; reload before saving rules.")
+        try:
+            result = store_rules.mutate(key, body.get("expected_version"), body.get("action"), body.get("rule"))
+        except ValueError as error:
+            abort(409, str(error))
+        return jsonify({"map_key": key, **result})
+
+    @app.get(prefix + "/maps/saved/by-id/<map_id>/rules")
+    @require_role("Viewer")
+    def platform_saved_map_rules_by_id(robot_id, map_id):
+        from area_rules.rules import RuleStore
+        if not re.fullmatch(r"[0-9a-f]{12}", map_id):
+            abort(400, "Invalid map identity.")
+        root = maps_root()
+        if root is None:
+            abort(503, "Map catalog root is unavailable.")
+        candidates = []
+        if root.is_dir():
+            for directory in root.iterdir():
+                if directory.is_dir() and not directory.is_symlink() and map_name_pattern.fullmatch(directory.name):
+                    for yaml_file in directory.glob("*.yaml"):
+                        if yaml_file.stem.endswith("_ros") or not map_name_pattern.fullmatch(yaml_file.stem):
+                            continue
+                        candidates.append(("ui", directory.name, yaml_file.stem))
+        if root.parent.is_dir():
+            for directory in root.parent.iterdir():
+                if directory.name != "ui" and directory.is_dir() and not directory.is_symlink() and map_name_pattern.fullmatch(directory.name):
+                    candidates.append(("project", "maps", directory.name))
+        for source, group_name, map_name in candidates:
+            try:
+                item = saved_map(root, source, group_name, map_name)
+            except (FileNotFoundError, ValueError, KeyError, OSError, yaml.YAMLError):
+                continue
+            if item["map_id"] == map_id:
+                return jsonify({"map_id": map_id, "map_key": item["map_key"],
+                                "source": source, "group": group_name, "map": map_name,
+                                **RuleStore(rule_store_path()).state(item["map_key"])})
+        abort(404, "No saved map matches the active map identity.")
+
     @app.get(prefix + "/maps/catalog")
     @require_role("Viewer")
     def platform_map_catalog(robot_id):
         root = maps_root()
-        if root is None or not root.is_dir():
+        if root is None or (not root.is_dir() and not root.parent.is_dir()):
             abort(503, "Map catalog root is unavailable.")
         entries = []
-        for group_dir in sorted(root.iterdir(), key=lambda item: item.name.lower()):
+        for group_dir in sorted(root.iterdir(), key=lambda item: item.name.lower()) if root.is_dir() else []:
             if group_dir.is_symlink() or not group_dir.is_dir():
                 continue
             for yaml_file in sorted(group_dir.glob("*.yaml"), key=lambda item: item.name.lower()):
@@ -1888,7 +1956,16 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
                     "asset_count": len(manifest),
                     "version_count": len(store.map_versions(robot_id, group_dir.name, map_name)),
                 })
-        return jsonify({"robot_id": robot_id, "maps": entries})
+        project_entries = []
+        project_root = root.parent
+        if project_root.is_dir():
+            for directory in sorted(project_root.iterdir(), key=lambda item: item.name.lower()):
+                if directory.name == "ui" or directory.is_symlink() or not directory.is_dir():
+                    continue
+                if not map_name_pattern.fullmatch(directory.name):
+                    continue
+                project_entries.append({"name": directory.name, "loadable": (directory / "map.yaml").is_file()})
+        return jsonify({"robot_id": robot_id, "maps": entries, "project_maps": project_entries})
 
     @app.get(prefix + "/maps/catalog/<group_name>/<map_name>")
     @require_role("Viewer")
@@ -1952,67 +2029,6 @@ def register_platform_api(app, bridge_provider, store, robot_id, auth_store=None
             manifest, metadata, g.identity["username"],
         )
         return jsonify({"version": version, "created": True}), 201
-
-    @app.get(prefix + "/maps/catalog/<group_name>/<map_name>/quality-reviews")
-    @require_role("Viewer")
-    def platform_map_quality_reviews(robot_id, group_name, map_name):
-        map_asset_manifest(group_name, map_name)
-        with store.connect() as db:
-            rows = db.execute("""SELECT * FROM map_quality_reviews WHERE robot_id=? AND group_name=? AND map_name=?
-                ORDER BY created_at DESC LIMIT 100""", (robot_id, group_name, map_name)).fetchall()
-        return jsonify({"reviews": [{**dict(row), "checks": json.loads(row["checks_json"])} for row in rows]})
-
-    @app.post(prefix + "/maps/catalog/<group_name>/<map_name>/quality-reviews")
-    @require_role("Engineer")
-    def platform_submit_map_quality_review(robot_id, group_name, map_name):
-        manifest, checksum = map_asset_manifest(group_name, map_name)
-        body = request.get_json(silent=True)
-        checks = body.get("checks") if isinstance(body, dict) else None
-        issues = body.get("issues", "") if isinstance(body, dict) else ""
-        required_checks = {"occupancy_map_reviewed", "point_cloud_reviewed", "map_alignment_reviewed",
-                           "localization_tested", "safety_zones_reviewed"}
-        if not isinstance(checks, dict) or set(checks) != required_checks or any(not isinstance(v, bool) for v in checks.values()):
-            abort(400, "Map quality checks must include every required boolean check.")
-        if not isinstance(issues, str) or len(issues) > 4000:
-            abort(400, "Map quality issues must be at most 4000 characters.")
-        version_id = f"sha256:{checksum}"
-        version = next((item for item in store.map_versions(robot_id, group_name, map_name) if item["checksum"] == checksum), None)
-        if not version:
-            metadata = store.map_metadata(robot_id, group_name, map_name) or {}
-            version = store.record_map_version(robot_id, group_name, map_name, version_id,
-                                               checksum, manifest, metadata, g.identity["username"])
-        review_id = str(uuid.uuid4())
-        with store.connect() as db:
-            db.execute("""INSERT INTO map_quality_reviews(robot_id,review_id,group_name,map_name,
-                version_id,checksum,checks_json,issues,submitted_by,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (robot_id, review_id, group_name, map_name, version_id, checksum,
-                 json.dumps(checks, sort_keys=True), issues.strip(), g.identity["username"], utc_now()))
-            store._append_event(db, robot_id, "map_quality_review_submitted", {
-                "review_id": review_id, "group": group_name, "map": map_name,
-                "version_id": version_id, "actor": g.identity["username"],
-            })
-        return jsonify({"review_id": review_id, "version_id": version_id,
-                        "checks": checks, "status": "SUBMITTED"}), 201
-
-    @app.patch(prefix + "/maps/quality-reviews/<review_id>")
-    @require_role("Admin")
-    def platform_review_map_quality(robot_id, review_id):
-        body = request.get_json(silent=True)
-        status = body.get("status") if isinstance(body, dict) else None
-        note = body.get("review_note", "") if isinstance(body, dict) else ""
-        if status not in ("APPROVED", "REJECTED") or not isinstance(note, str) or len(note) > 2000:
-            abort(400, "A valid review status and note are required.")
-        with store.connect() as db:
-            changed = db.execute("""UPDATE map_quality_reviews SET status=?,reviewed_by=?,review_note=?,reviewed_at=?
-                WHERE robot_id=? AND review_id=? AND status='SUBMITTED'""",
-                (status, g.identity["username"], note, utc_now(), robot_id, review_id)).rowcount
-            if not changed:
-                abort(404, "Pending map quality review not found.")
-            store._append_event(db, robot_id, "map_quality_review_decided", {
-                "review_id": review_id, "status": status, "actor": g.identity["username"],
-            })
-        return jsonify({"review_id": review_id, "status": status, "reviewed_by": g.identity["username"]})
 
     @app.get(prefix + "/status")
     @require_role("Viewer")

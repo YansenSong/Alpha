@@ -115,9 +115,12 @@
 
   --gradient-primary: linear-gradient(90deg, #7c3aed, #a855f7, #ec6f91);
 
-  --shadow-card: 0 12px 35px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.025);
-  --shadow-raised: 0 18px 45px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  --shadow-recessed: inset 0 2px 10px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-card: 0 12px 35px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-raised: 0 18px 45px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --shadow-recessed: inset 0 2px 10px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
 .dark .border-borderSubtle {
@@ -292,6 +295,143 @@ input[type="range"] {
   box-shadow: var(--shadow-card);
 }
 
+/* Shared form and collection rhythm for operational pages. */
+.workspace-card {
+  padding: 1.25rem;
+}
+.workspace-card__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1rem;
+}
+.workspace-card__title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.workspace-card__hint {
+  color: rgb(var(--color-theme-text-gray));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.workspace-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.875rem;
+  align-items: end;
+}
+.workspace-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: rgb(var(--color-text-white-hover));
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.workspace-field input,
+.workspace-field select,
+.workspace-field textarea {
+  min-height: 2.75rem;
+  width: 100%;
+  border: 1px solid rgb(var(--color-border-default) / 0.7);
+  border-radius: 0.65rem;
+  background: rgb(var(--color-bg-surface) / 0.72);
+  padding: 0.55rem 0.75rem;
+  color: rgb(var(--color-text-white-hover));
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+.workspace-field input:hover,
+.workspace-field select:hover,
+.workspace-field textarea:hover {
+  border-color: rgb(var(--color-border-strong));
+}
+.workspace-action {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid rgb(var(--color-border-default) / 0.7);
+  border-radius: 0.65rem;
+  background: rgb(var(--color-bg-surface) / 0.7);
+  padding: 0.55rem 0.9rem;
+  color: rgb(var(--color-text-white-hover));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+}
+.workspace-action:hover:not(:disabled) {
+  border-color: rgb(var(--color-theme-blue) / 0.55);
+  background: rgb(var(--color-theme-blue) / 0.08);
+}
+.workspace-action--primary {
+  border-color: rgb(var(--color-theme-blue));
+  background: rgb(var(--color-theme-blue));
+  color: white;
+}
+.workspace-action--primary:hover:not(:disabled) {
+  background: rgb(var(--color-theme-dark-blue));
+  color: white;
+}
+.workspace-action:disabled {
+  opacity: 0.48;
+}
+.workspace-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workspace-list > li + li {
+  border-top: 1px solid rgb(var(--color-border-subtle) / 0.65);
+}
+.workspace-list__item {
+  min-width: 0;
+  padding: 1rem 0;
+}
+.workspace-list__item:first-child {
+  padding-top: 0;
+}
+.workspace-list__item:last-child {
+  padding-bottom: 0;
+}
+.workspace-meta {
+  color: rgb(var(--color-theme-text-gray));
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.workspace-alert {
+  border: 1px solid rgb(var(--color-status-red) / 0.35);
+  border-radius: 0.75rem;
+  background: rgb(var(--color-status-red) / 0.06);
+  padding: 0.75rem 1rem;
+  color: rgb(var(--color-status-red));
+  font-size: 0.8125rem;
+}
+.dark .workspace-field input,
+.dark .workspace-field select,
+.dark .workspace-field textarea,
+.dark .workspace-action {
+  border-color: rgb(var(--color-border-default) / 0.14);
+}
+.dark .workspace-field input:hover,
+.dark .workspace-field select:hover,
+.dark .workspace-field textarea:hover {
+  border-color: rgb(var(--color-border-strong) / 0.28);
+}
+.dark .workspace-action--primary {
+  border-color: rgb(var(--color-theme-blue));
+}
+.dark .workspace-list > li + li {
+  border-color: rgb(var(--color-border-subtle) / 0.09);
+}
+
 :root:not(.dark) .dashboard-card {
   border-color: rgb(var(--color-border-subtle));
 }
@@ -409,8 +549,8 @@ input[type="range"] {
 
 .icon-button {
   display: inline-flex;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   align-items: center;
   justify-content: center;
   border: 1px solid rgb(var(--color-border-subtle) / 0.1);

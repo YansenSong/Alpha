@@ -33,6 +33,7 @@ const State = ({
   showVelocity = true,
   splitVelocityCards = false,
   separateHeading = false,
+  gridClassName = "",
 }) => {
   const ros = useRos();
 
@@ -132,7 +133,7 @@ const State = ({
     <div
       className={`grid w-full min-w-0 grid-cols-1 ${
         showPosition && showVelocity ? "sm:grid-cols-2" : ""
-      } ${compact ? "gap-2" : "gap-3"}`}
+      } ${compact ? "gap-2" : "gap-3"} ${gridClassName}`}
     >
       {showVelocity && (
         <MetricCard

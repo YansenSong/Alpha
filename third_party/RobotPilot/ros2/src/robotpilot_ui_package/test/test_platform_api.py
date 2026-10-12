@@ -678,22 +678,6 @@ class PlatformApiTest(unittest.TestCase):
              "map_checksum_version_recorded"],
         )
 
-    def test_map_quality_review_is_bound_to_immutable_server_checksum(self):
-        path = self.base + "/maps/catalog/Campus-A/Office/quality-reviews"
-        checks = {"occupancy_map_reviewed": True, "point_cloud_reviewed": True,
-                  "map_alignment_reviewed": True, "localization_tested": True,
-                  "safety_zones_reviewed": True}
-        submitted = self.client.post(path, json={"checks": checks, "issues": "fixture review"})
-        self.assertEqual(submitted.status_code, 201)
-        self.assertEqual(submitted.json["status"], "SUBMITTED")
-        listing = self.client.get(path).json["reviews"]
-        self.assertEqual(listing[0]["checks"], checks)
-        self.assertTrue(listing[0]["checksum"])
-        decision = self.client.patch(self.base + f"/maps/quality-reviews/{submitted.json['review_id']}",
-                                     json={"status": "APPROVED", "review_note": "reviewed"})
-        self.assertEqual(decision.status_code, 200)
-        self.assertEqual(decision.json["status"], "APPROVED")
-
     def test_map_catalog_rejects_traversal_and_symlinked_image(self):
         detail_path = self.base + "/maps/catalog/Campus-A/Office"
         self.assertEqual(self.client.get(self.base + "/maps/catalog/../Office").status_code, 400)

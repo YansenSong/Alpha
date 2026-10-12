@@ -165,8 +165,16 @@ class RuleStore:
             self.maps = json.loads(self.path.read_text(encoding="utf-8")).get("maps", {})
         except FileNotFoundError:
             self.maps = {}
+        self._loaded_mtime = self.path.stat().st_mtime_ns if self.path.exists() else None
+
+    def _refresh(self):
+        mtime = self.path.stat().st_mtime_ns if self.path.exists() else None
+        if mtime != self._loaded_mtime:
+            self.maps = json.loads(self.path.read_text(encoding="utf-8")).get("maps", {}) if mtime else {}
+            self._loaded_mtime = mtime
 
     def state(self, key):
+        self._refresh()
         saved = self.maps.get(key, {"version": 0, "rules": []})
         return {"version": saved["version"], "rules": [r for r in saved["rules"] if active(r)]}
 
@@ -223,6 +231,7 @@ class RuleStore:
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(tmp, self.path)
+            self._loaded_mtime = self.path.stat().st_mtime_ns
         finally:
             if tmp and os.path.exists(tmp):
                 os.unlink(tmp)

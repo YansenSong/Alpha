@@ -37,12 +37,14 @@ const getScene = () => {
 const Map = forwardRef(
   ({ onContextGoal, onContextSavePose, onContextSetPose,
     drawingArea = false, areaDrawType = "keepout", areaWallWidth = 0.1,
+    areaPreview = null,
     onAreaDraw }, ref) => {
     const { t } = useT();
     const ros = useRos();
 
     const mapContainer = useRef(null);
     const mapItem = useRef(null);
+    const areaPreviewOverlay = useRef(null);
 
     const viewerRef = useRef(null);
     const onAreaDrawRef = useRef(onAreaDraw);
@@ -512,6 +514,62 @@ const Map = forwardRef(
       };
     }, [drawingArea, areaDrawType, areaWallWidth]);
 
+    // Keep the draft above the canvas. The robot map client redraws its
+    // CreateJS children as live map and rule messages arrive.
+    useEffect(() => {
+      const overlay = areaPreviewOverlay.current;
+      if (!areaPreview || !overlay) return undefined;
+      const shape = overlay.firstElementChild;
+      let lastGeometry = "";
+      const update = () => {
+        const scene = viewerRef.current?.scene;
+        const canvas = scene?.canvas;
+        if (!scene?.localToGlobal || !canvas || !shape) {
+          overlay.style.visibility = "hidden";
+          return;
+        }
+        const canvasRect = canvas.getBoundingClientRect();
+        const overlayRect = overlay.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height || !overlayRect.width || !overlayRect.height) {
+          overlay.style.visibility = "hidden";
+          return;
+        }
+        const toScreen = (x, y) => {
+          const point = scene.localToGlobal(x, -y);
+          return {
+            x: canvasRect.left - overlayRect.left + point.x * canvasRect.width / canvas.width,
+            y: canvasRect.top - overlayRect.top + point.y * canvasRect.height / canvas.height,
+          };
+        };
+        const bounds = areaPreview.type === "wall"
+          ? [toScreen(areaPreview.x1, areaPreview.y1), toScreen(areaPreview.x2, areaPreview.y2)]
+          : [
+              toScreen(areaPreview.cx - areaPreview.w / 2, areaPreview.cy + areaPreview.h / 2),
+              toScreen(areaPreview.cx + areaPreview.w / 2, areaPreview.cy - areaPreview.h / 2),
+            ];
+        const [start, end] = bounds;
+        const geometry = areaPreview.type === "wall"
+          ? [start.x, start.y, end.x, end.y,
+              Math.max(2, Number(areaPreview.width) * Math.abs(scene.scaleX || 1) * canvasRect.width / canvas.width)]
+          : [Math.min(start.x, end.x), Math.min(start.y, end.y),
+              Math.abs(end.x - start.x), Math.abs(end.y - start.y)];
+        const nextGeometry = geometry.join(",");
+        if (nextGeometry !== lastGeometry) {
+          const names = areaPreview.type === "wall"
+            ? ["x1", "y1", "x2", "y2", "stroke-width"]
+            : ["x", "y", "width", "height"];
+          names.forEach((name, index) => shape.setAttribute(name, geometry[index]));
+          lastGeometry = nextGeometry;
+        }
+        overlay.style.visibility = "visible";
+      };
+      update();
+      const interval = window.setInterval(update, 50);
+      return () => {
+        window.clearInterval(interval);
+      };
+    }, [areaPreview]);
+
     /**
      * 全屏模式：canvas 的像素宽高在构造时固定（ROS2D.Viewer 不会自动调整），因此进入/退出全屏时需要直接调整
      * canvas 元素和 viewer 实例字段，然后重新触发 map client 自带的 "change" 事件。此操作会复用 nav2d.js
@@ -745,6 +803,24 @@ const Map = forwardRef(
               className="mapContainer h-full w-full text-center text-[0px]"
             />
           </div>
+
+          {areaPreview && (
+            <svg
+              ref={areaPreviewOverlay}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-[5] h-full w-full overflow-visible"
+            >
+              {areaPreview.type === "wall" ? (
+                <line stroke="#a855f7" strokeLinecap="round" />
+              ) : (
+                <rect
+                  fill={{ keepout: "rgba(239,68,68,0.28)", speed: "rgba(234,179,8,0.26)", closure: "rgba(249,115,22,0.30)" }[areaPreview.type] || "rgba(239,68,68,0.28)"}
+                  stroke={{ keepout: "#ef4444", speed: "#eab308", closure: "#f97316" }[areaPreview.type] || "#ef4444"}
+                  strokeWidth="2"
+                />
+              )}
+            </svg>
+          )}
 
           <div className="absolute right-3 top-3 z-10">
             <IconButton

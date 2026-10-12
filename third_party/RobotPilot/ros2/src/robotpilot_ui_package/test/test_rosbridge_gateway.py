@@ -31,7 +31,7 @@ class GatewayPolicyTest(unittest.TestCase):
 
         self.assertEqual(required_role(message("get_state")), "Viewer")
         self.assertEqual(required_role(message("request_stop")), "Operator")
-        self.assertEqual(required_role(message("request_release")), "Engineer")
+        self.assertEqual(required_role(message("request_release")), "Operator")
         self.assertIsNone(required_role(message("anything_else")))
         self.assertEqual(required_role({
             "op": "advertise", "topic": "/safety/software_stop/request",

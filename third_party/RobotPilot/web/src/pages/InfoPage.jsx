@@ -59,6 +59,28 @@ const InfoPage = () => {
     : platform?.autonomy_ready
     ? "ready"
     : "blocked";
+  const robotConnection = robotStatus.stale || platform?.robot_connection?.stale
+    ? { label: "Stale data", status: "warning" }
+    : platform?.robot_connection?.online
+    ? { label: "Online", status: "success" }
+    : { label: "Unknown", status: "unknown" };
+  const currentMap = robotStatus.stale
+    ? t("Stale data")
+    : platform?.current_map?.map ||
+      platform?.current_map?.map_id ||
+      t("Unavailable");
+  const localization = robotStatus.stale
+    ? { label: "Unknown", status: "unknown" }
+    : platform?.localization?.stale
+    ? { label: "Stale data", status: "warning" }
+    : platform?.localization?.online
+    ? { label: "Online", status: "success" }
+    : { label: "Unavailable", status: "unknown" };
+  const softwareStop = robotStatus.stale || platform?.software_stop?.stale
+    ? { label: "Unknown", status: "unknown" }
+    : platform?.software_stop?.active
+    ? { label: "Active", status: "warning" }
+    : { label: "Inactive", status: "neutral" };
   const battery = batteryTelemetry.state;
   const rawBatteryPct = battery?.percent == null ? null : Number(battery.percent);
   const batteryPct = Number.isFinite(rawBatteryPct) ? rawBatteryPct : null;
@@ -92,7 +114,7 @@ const InfoPage = () => {
         description="Live camera, telemetry, power, and ROS health in one operational view."
       />
 
-      <DashboardCard className="space-y-2 p-4">
+      <DashboardCard className="space-y-4 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-[RobotoMono] text-xs uppercase tracking-wider text-themeTextGray">
             <T>{"Robot readiness"}</T>
@@ -114,42 +136,66 @@ const InfoPage = () => {
             }
           />
         </div>
-        <div className="grid gap-2 text-xs text-themeTextGray sm:grid-cols-2 xl:grid-cols-4">
-          <p>
-            机器人连接：{" "}
-            {robotStatus.stale || platform?.robot_connection?.stale
-              ? "已断开或过期"
-              : platform?.robot_connection?.online
-              ? "在线"
-              : "未知"}
+        <dl className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="min-w-0 rounded-xl border border-borderSubtle bg-bgCard/40 px-3 py-3">
+            <dt className="mb-2 text-[10px] font-medium uppercase tracking-wider text-themeTextGray">
+              <T>{"Robot connection"}</T>
+            </dt>
+            <dd>
+              <StatusBadge
+                status={robotConnection.status}
+                label={robotConnection.label}
+              />
+            </dd>
+          </div>
+          <div className="min-w-0 rounded-xl border border-borderSubtle bg-bgCard/40 px-3 py-3">
+            <dt className="mb-2 text-[10px] font-medium uppercase tracking-wider text-themeTextGray">
+              <T>{"Current map"}</T>
+            </dt>
+            <dd
+              className="truncate font-[RobotoMono] text-sm font-semibold text-textWhiteHover"
+              title={currentMap}
+            >
+              {currentMap}
+            </dd>
+          </div>
+          <div className="min-w-0 rounded-xl border border-borderSubtle bg-bgCard/40 px-3 py-3">
+            <dt className="mb-2 text-[10px] font-medium uppercase tracking-wider text-themeTextGray">
+              <T>{"Localization"}</T>
+            </dt>
+            <dd>
+              <StatusBadge
+                status={localization.status}
+                label={localization.label}
+              />
+            </dd>
+          </div>
+          <div className="min-w-0 rounded-xl border border-borderSubtle bg-bgCard/40 px-3 py-3">
+            <dt className="mb-2 text-[10px] font-medium uppercase tracking-wider text-themeTextGray">
+              <T>{"Software Stop"}</T>
+            </dt>
+            <dd>
+              <StatusBadge
+                status={softwareStop.status}
+                label={softwareStop.label}
+              />
+            </dd>
+          </div>
+        </dl>
+        {INSPECTION_PROFILE ? (
+          <p className="rounded-xl border border-statusYellow/40 bg-statusYellow/5 p-3 text-sm text-statusYellow">
+            {t(
+              "Project localization interface is unconfigured. Status: UNKNOWN.",
+            )}
           </p>
-          <p>
-            <T>{"Current map"}</T>:{" "}
-            {robotStatus.stale
-              ? t("Stale data")
-              : platform?.current_map?.map ||
-                platform?.current_map?.map_id ||
-                t("Unavailable")}
-          </p>
-          <p>
-            <T>{"Localization"}</T>:{" "}
-            {robotStatus.stale
-              ? t("Unknown")
-              : platform?.localization?.stale
-              ? t("Stale data")
-              : platform?.localization?.online
-              ? t("Online")
-              : t("Unavailable")}
-          </p>
-          <p>
-            <T>{"Software Stop"}</T>:{" "}
-            {robotStatus.stale || platform?.software_stop?.stale
-              ? t("Unknown")
-              : platform?.software_stop?.active
-              ? t("Active")
-              : t("Inactive")}
-          </p>
-        </div>
+        ) : (
+          <RobotState
+            compact
+            splitVelocityCards
+            separateHeading
+            gridClassName="xl:grid-cols-4"
+          />
+        )}
         {platform?.readiness_blockers?.length > 0 && (
           <p className="text-xs text-statusYellow">
             <T>{"Autonomy blocked"}</T>:{" "}
@@ -166,15 +212,6 @@ const InfoPage = () => {
           <div className="h-[320px] min-w-0 sm:h-[420px] xl:h-[500px]">
             <Camera />
           </div>
-          {INSPECTION_PROFILE ? (
-            <p className="dashboard-card p-4 text-sm text-statusYellow">
-              {t(
-                "Project localization interface is unconfigured. Status: UNKNOWN.",
-              )}
-            </p>
-          ) : (
-            <RobotState />
-          )}
         </section>
 
         <section className="grid min-w-0 content-start gap-4">

@@ -1,10 +1,6 @@
 import React, { useContext, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import {
-  AuthContext,
-  ThemeContext,
-  useRosStatus,
-} from "../app/App";
+import { AuthContext, ThemeContext, useRosStatus } from "../app/App";
 import { apiFetch } from "../shared/api/apiFetch";
 import { IconButton, StatusBadge } from "../shared/ui/Dashboard";
 import { NAV_REGISTRY } from "../pages/registry";
@@ -26,6 +22,40 @@ const statusConfig = {
   connected: { label: "Robot connected", pulse: true },
   disconnected: { label: "Robot offline", pulse: false },
   error: { label: "Connection error", pulse: false },
+};
+
+const NAV_GROUPS = [
+  {
+    zh: "工作台",
+    en: "Workspace",
+    paths: ["/", "/route", "/maps", "/scheduler"],
+  },
+  {
+    zh: "监控与记录",
+    en: "Monitor & records",
+    paths: ["/info", "/health", "/events", "/assets", "/bms"],
+  },
+  {
+    zh: "系统工具",
+    en: "System tools",
+    paths: ["/logs", "/devices", "/console"],
+  },
+];
+
+const getNavGroups = () => {
+  const groups = NAV_GROUPS.map((group) => ({
+    ...group,
+    pages: group.paths
+      .map((path) => NAV_REGISTRY.find((page) => page.path === path))
+      .filter(Boolean),
+  })).filter((group) => group.pages.length);
+  const knownPaths = new Set(NAV_GROUPS.flatMap((group) => group.paths));
+  const additionalPages = NAV_REGISTRY.filter(
+    (page) => !knownPaths.has(page.path),
+  );
+  if (additionalPages.length)
+    groups.push({ zh: "更多页面", en: "More pages", pages: additionalPages });
+  return groups;
 };
 
 const NavIcon = ({ name }) => {
@@ -257,22 +287,31 @@ const Header = ({ showLogs, onToggleLogs }) => {
           aria-label={t("Primary navigation")}
           data-tour="nav"
         >
-          {NAV_REGISTRY.map(({ path: to, label: navLabel, icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
-                  isActive
-                    ? "bg-bgCard text-textWhiteHover shadow-md shadow-black/10 ring-1 ring-white/5"
-                    : "text-themeTextGray hover:bg-bgCard/60 hover:text-textWhiteHover"
-                }`
-              }
-            >
-              <NavIcon name={icon} />
-              <span>{t(navLabel)}</span>
-            </NavLink>
+          {getNavGroups().map((group) => (
+            <div key={group.en} className="mb-3">
+              <p className="px-3 pb-1 pt-2 font-[RobotoMono] text-[10px] font-semibold uppercase tracking-[0.14em] text-themeTextGray">
+                {lang === "zh-CN" ? group.zh : group.en}
+              </p>
+              <div className="grid gap-1">
+                {group.pages.map(({ path: to, label: navLabel, icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    className={({ isActive }) =>
+                      `flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition-all ${
+                        isActive
+                          ? "bg-themeBlue/10 text-themeBlue ring-1 ring-themeBlue/15"
+                          : "text-themeTextGray hover:bg-bgCard/60 hover:text-textWhiteHover"
+                      }`
+                    }
+                  >
+                    <NavIcon name={icon} />
+                    <span>{t(navLabel)}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -398,23 +437,30 @@ const Header = ({ showLogs, onToggleLogs }) => {
                     </button>
                   </div>
                 )}
-                {NAV_REGISTRY.map(({ path: to, label: navLabel, icon }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={to === "/"}
-                    onClick={closeMenu}
-                    className={({ isActive }) =>
-                      `flex min-h-[46px] items-center gap-3 rounded-xl px-3 text-sm font-semibold ${
-                        isActive
-                          ? "bg-themeBlue/10 text-themeBlue"
-                          : "text-textWhiteHover hover:bg-bgSurface"
-                      }`
-                    }
-                  >
-                    <NavIcon name={icon} />
-                    {t(navLabel)}
-                  </NavLink>
+                {getNavGroups().map((group) => (
+                  <div key={group.en}>
+                    <p className="px-3 pb-1 pt-3 font-[RobotoMono] text-[10px] font-semibold uppercase tracking-[0.14em] text-themeTextGray">
+                      {lang === "zh-CN" ? group.zh : group.en}
+                    </p>
+                    {group.pages.map(({ path: to, label: navLabel, icon }) => (
+                      <NavLink
+                        key={to}
+                        to={to}
+                        end={to === "/"}
+                        onClick={closeMenu}
+                        className={({ isActive }) =>
+                          `flex min-h-[46px] items-center gap-3 rounded-xl px-3 text-sm font-semibold ${
+                            isActive
+                              ? "bg-themeBlue/10 text-themeBlue"
+                              : "text-textWhiteHover hover:bg-bgSurface"
+                          }`
+                        }
+                      >
+                        <NavIcon name={icon} />
+                        {t(navLabel)}
+                      </NavLink>
+                    ))}
+                  </div>
                 ))}
                 <button
                   type="button"

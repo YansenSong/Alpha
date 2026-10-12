@@ -325,6 +325,8 @@ class MissionManager(Node):
             return
         self.software_stop_state = state
         self.software_stop_received_at = time.monotonic()
+        # Clearing /stop only releases the command-velocity latch. A paused
+        # mission is resumed exclusively by an explicit operator command.
 
     def on_battery_state(self, message):
         try:

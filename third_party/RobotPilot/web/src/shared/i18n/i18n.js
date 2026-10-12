@@ -183,21 +183,18 @@ const ZH = {
   "Connection error": "连接错误",
   "Software Stop (not physical E-STOP)": "软件停车（非物理急停）",
   "Software stop confirmed": "软件停车已确认",
-  "Physical E-STOP status unavailable; software stop is separate":
-    "物理急停状态不可用；软件停车为独立功能",
   "Software stop active but persistence is unavailable":
     "软件停车已生效，但持久化状态不可用",
+  "Software stop active; state is stale": "软件停车仍生效，但状态已过期",
+  "Software stop remains active": "软件停车仍处于生效状态",
   "Software stop request pending": "软件停车请求中",
   "Software stop state unknown": "软件停车状态未知",
-  "Release software stop": "释放软件停车",
-  "Software stop release requires Engineer permission and safe robot state":
-    "释放软件停车需要工程师权限，且机器人安全状态必须满足",
+  "Resume navigation": "恢复导航",
+  "Resume navigation and continue the current task": "恢复导航并继续当前任务",
   "Cannot send navigation goal while software stop state is unknown or active":
     "软件停车状态未知或已生效，无法发送导航目标",
-  "Software stop requested; waiting for robot confirmation":
-    "已请求软件停车，等待机器人确认",
-  "Release software stop confirmation":
-    "要释放软件停车吗？如果导航或手动速度命令仍有效，机器人可能再次移动。此操作不会解除或验证物理急停。",
+  "Software stop requested; navigation task is retained":
+    "软件停车已请求，当前导航任务会保留",
   Manual: "手动控制",
   "Max Speed": "最高速度",
   "Software Stop": "软件停车",
@@ -607,6 +604,7 @@ const ZH = {
   "Route execution is controlled by MissionManager.":
     "路线由 MissionManager 统一执行和追踪。",
   "Another task is already active.": "已有任务正在运行。",
+  "A task is paused. Use Resume navigation to continue it.": "当前任务已暂停，请点击“恢复导航”继续执行。",
   Mon: "周一",
   Tue: "周二",
   Wed: "周三",
@@ -681,11 +679,18 @@ const ZH = {
   "shown ·": "已显示 ·",
   buffered: "条已缓存",
   "Topic Echo": "Topic 回显",
-  "For advanced troubleshooting only — ask your integrator for the exact topic names to type here.":
-    "仅供高级故障排查使用；请向集成方确认要输入的 topic 名称。",
+  "Select a currently active topic to inspect its messages.":
+    "选择当前正在发布的话题，查看其实时消息。",
+  "Topic name": "话题名称",
+  "Select a topic": "选择话题",
+  "Loading available topics…": "正在加载话题列表…",
+  "ROS bridge is disconnected": "ROS Bridge 未连接",
+  "Topic list unavailable": "无法获取话题列表",
+  "No active topics found": "当前没有可用话题",
+  "Refresh topics": "刷新话题列表",
   Echo: "查看",
-  "Enter a topic name and press Echo to stream its messages.":
-    "输入 topic 名称并点击查看，即可接收消息。",
+  "Select a topic and press Echo to stream its messages.":
+    "选择话题并点击查看，即可接收其实时消息。",
   "Subscribed to": "已订阅",
   "— waiting for a message…": "— 等待消息…",
   msgs: "条消息",
@@ -887,7 +892,6 @@ const ZH = {
   "TF chain": "TF 变换链",
   "node…": "节点…",
   "search text…": "搜索文本…",
-  "msg type (optional)": "消息类型（可选）",
   "Re-localizing…": "正在重新定位…",
   "Re-localize": "重新定位",
   "Waiting for /rosout…": "等待 /rosout 消息…",

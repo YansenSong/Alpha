@@ -39,10 +39,10 @@ const ConsolePage = () => {
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
-        <div className="h-[440px] min-h-0 xl:h-auto">
+        <div className="h-[880px] max-h-[880px] min-h-0">
           <RosoutConsole />
         </div>
-        <div className="h-[440px] min-h-0 xl:h-auto">
+        <div className="h-[880px] max-h-[880px] min-h-0">
           <TopicEcho />
         </div>
       </div>

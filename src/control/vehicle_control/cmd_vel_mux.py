@@ -7,10 +7,10 @@ from /neupan_cmd_vel, and forwards the selected command to the
 ackermann_steering_controller as TwistStamped. The /stop override has highest
 priority.
 
-The /stop topic is retained as an assertion-only compatibility input.
-Authenticated Web stop requests use /safety/software_stop/request and receive
-robot state on /safety/software_stop/state. The persistent latch cannot be
-cleared by /stop=false or the mission manager's separate /mission/hold.
+Both /stop=true and /stop=false control the persistent software stop latch.
+The authenticated Web HMI publishes that Bool topic directly and receives
+robot state on /safety/software_stop/state. The mission manager's separate
+/mission/hold remains an independent motion hold.
 
 """
 import copy
@@ -116,7 +116,7 @@ class CmdVelMux(Node):
         if self.stop_requested:
             self.get_logger().warn(
                 'Restored active software stop from persistent state; '
-                'an explicit authorized release is required'
+                'publish /stop=false to release it'
             )
 
     def neupan_callback(self, msg: Twist):
@@ -129,20 +129,16 @@ class CmdVelMux(Node):
 
     def stop_callback(self, msg: Bool):
         requested = bool(msg.data)
-        if requested:
-            self.set_software_stop(
-                active=True,
-                source='legacy_ros_stop',
-                reason='Legacy /stop topic asserted',
-                request_id=str(uuid.uuid4()),
-            )
-        elif self.stop_requested:
-            # Bool has no actor, confirmation, or request correlation. It must
-            # not be able to release the persistent operator stop latch.
-            self.get_logger().warn(
-                'Ignoring legacy /stop=false; use the authorized '
-                'software stop release request'
-            )
+        self.set_software_stop(
+            active=requested,
+            source='ros_stop_topic',
+            reason=(
+                'Software stop asserted via /stop=true'
+                if requested
+                else 'Software stop released via /stop=false'
+            ),
+            request_id=str(uuid.uuid4()),
+        )
 
     def load_software_stop_state(self):
         try:
@@ -288,102 +284,12 @@ class CmdVelMux(Node):
             )
             return
 
-        if not self.safe_to_release_software_stop():
-            self.software_stop_state.update({
-                'request_id': request_id,
-                'observed_at': self.utc_now(),
-                'result': 'rejected',
-                'reason': self.release_block_reason(),
-            })
-            try:
-                self.persist_software_stop_state()
-            except OSError as exc:
-                self.software_stop_state.update({
-                    'result': 'degraded',
-                    'durable': False,
-                    'reason': f'Release rejected; state update could not be persisted: {exc}',
-                })
-                self.get_logger().error(
-                    f'Software stop rejection state could not be persisted: {exc}'
-                )
-            self.publish_software_stop_state(force=True)
-            return
-
         self.set_software_stop(
             active=False,
             source=source,
-            reason=reason or 'Authorized software stop release',
+            reason=reason or 'Software stop released by request',
             request_id=request_id,
         )
-
-    def safe_to_release_software_stop(self):
-        if not self.software_stop_state.get('durable', False):
-            return False
-        if self.mission_hold_requested:
-            return False
-        if self.rules_hold_active():
-            return False
-        now = time.monotonic()
-        manual_is_fresh = (
-            self.manual_msg is not None
-            and self.manual_received_at is not None
-            and now - self.manual_received_at <= self.manual_cmd_timeout
-        )
-        neupan_is_fresh = (
-            self.neupan_msg is not None
-            and self.neupan_received_at is not None
-            and now - self.neupan_received_at <= self.neupan_cmd_timeout
-        )
-        if manual_is_fresh and self.has_nonzero_velocity(self.manual_msg):
-            return False
-        if neupan_is_fresh and self.has_nonzero_velocity(self.neupan_msg):
-            return False
-        area_fresh = (
-            self.area_control is not None
-            and self.area_control_received_at is not None
-            and now - self.area_control_received_at <= self.area_control_timeout
-        )
-        if self.area_rules_required and not area_fresh:
-            return False
-        if area_fresh and (not self.area_control['ready'] or self.area_control['stop']):
-            return False
-        return True
-
-    def release_block_reason(self):
-        if not self.software_stop_state.get('durable', False):
-            return 'Persistent software stop state is not verified'
-        if self.mission_hold_requested:
-            return 'Task hold is active'
-        if self.rules_hold_active():
-            return 'Navigation rules hold is active or stale'
-        now = time.monotonic()
-        if (self.manual_msg is not None and self.manual_received_at is not None
-                and now - self.manual_received_at <= self.manual_cmd_timeout
-                and self.has_nonzero_velocity(self.manual_msg)):
-            return 'Manual velocity command is active'
-        if (self.neupan_msg is not None and self.neupan_received_at is not None
-                and now - self.neupan_received_at <= self.neupan_cmd_timeout
-                and self.has_nonzero_velocity(self.neupan_msg)):
-            return 'Navigation velocity command is active'
-        area_fresh = (
-            self.area_control is not None
-            and self.area_control_received_at is not None
-            and time.monotonic() - self.area_control_received_at <= self.area_control_timeout
-        )
-        if self.area_rules_required and not area_fresh:
-            return 'Area safety status is unavailable or stale'
-        if area_fresh and not self.area_control['ready']:
-            return 'Area safety is not ready'
-        if area_fresh and self.area_control['stop']:
-            return 'Area stop is active'
-        return 'Robot safety conditions are not ready'
-
-    @staticmethod
-    def has_nonzero_velocity(msg):
-        return any((
-            msg.linear.x, msg.linear.y, msg.linear.z,
-            msg.angular.x, msg.angular.y, msg.angular.z,
-        ))
 
     def publish_software_stop_state(self, force=False):
         now = time.monotonic()

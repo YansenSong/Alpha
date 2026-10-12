@@ -1,10 +1,10 @@
-import React, { useCallback, useContext, useEffect, useRef } from "react";
+import React, { useCallback, useContext } from "react";
 
-import { AuthContext, useRos, useRosStatus } from "../app/App";
-import { AppConfig } from "../shared/constants";
+import { AuthContext, useRosStatus } from "../app/App";
 import { addEvent } from "../shared/events/eventLog";
 import { useT } from "../shared/i18n/i18n";
 import { INSPECTION_PROFILE } from "../shared/robot/robotContract";
+import SoftwareStopActionButton from "./SoftwareStopActionButton";
 import useSoftwareStop from "../shared/hooks/useSoftwareStop";
 import useBatteryState from "../shared/hooks/useBatteryState";
 
@@ -33,42 +33,19 @@ const batteryColor = (pct, stale) =>
 
 /** Shared status bar with robot-confirmed software stop state. */
 const StatusBar = () => {
-  const ros = useRos();
   const rosStatus = useRosStatus();
   const { robotMode } = useContext(AuthContext);
   const { t } = useT();
   const batteryTelemetry = useBatteryState();
   const softwareStop = useSoftwareStop();
-  const cancelRef = useRef(null);
-
-  useEffect(() => {
-    if (!ros || !window.ROSLIB) return undefined;
-    cancelRef.current = new window.ROSLIB.Service({
-      ros,
-      name: AppConfig.NAV_CANCEL_GOAL_SERVICE,
-      serviceType: "action_msgs/CancelGoal",
-    });
-  }, [ros]);
 
   const requestSoftwareStop = useCallback(() => {
     if (INSPECTION_PROFILE || !softwareStop.canRequestStop) return;
     softwareStop.requestStop();
-    // Nav2 cancellation is cooperative; the mux's confirmed latch is the stop.
-    cancelRef.current?.callService(
-      new window.ROSLIB.ServiceRequest({
-        goal_info: {
-          goal_id: { uuid: new Array(16).fill(0) },
-          stamp: { sec: 0, nanosec: 0 },
-        },
-      }),
-      () => {},
-      () => {},
-    );
     addEvent({
       type: "operator",
       severity: "warning",
-      message:
-        "Software stop requested (status bar); awaiting robot confirmation",
+      message: "Software stop requested from status bar",
     });
   }, [softwareStop]);
 
@@ -78,10 +55,16 @@ const StatusBar = () => {
     battery?.available && battery.percent != null
       ? Number(battery.percent)
       : null;
-  const stopActive = softwareStop.stateFresh && softwareStop.robotState?.active;
+  const stopActive = softwareStop.robotState?.active === true;
+  const showResumeNavigation =
+    stopActive || softwareStop.canResumePausedTask;
   const stopStatus = softwareStop.requestState?.status;
   const stopLabel = stopActive
-    ? softwareStop.robotState.durable &&
+    ? !softwareStop.stateFresh
+      ? t("Software stop active; state is stale")
+      : softwareStop.robotState.result === "rejected"
+      ? t("Software stop remains active")
+      : softwareStop.robotState.durable &&
       softwareStop.robotState.result === "confirmed"
       ? t("Software stop confirmed")
       : t("Software stop active but persistence is unavailable")
@@ -176,13 +159,14 @@ const StatusBar = () => {
           }`}
         >
           {stopLabel}
-          {softwareStop.requestState?.status === "rejected" &&
-            `: ${softwareStop.requestState.reason}`}
+          {softwareStop.requestState?.status === "rejected"
+            ? `: ${softwareStop.requestState.reason}`
+            : stopActive && softwareStop.robotState.result === "rejected"
+            ? `: ${softwareStop.robotState.reason}`
+            : ""}
         </span>
-        <span className="text-[9px] text-themeTextGray">
-          {t("Physical E-STOP status unavailable; software stop is separate")}
-        </span>
-        <button
+        <SoftwareStopActionButton
+          active={false}
           onClick={requestSoftwareStop}
           disabled={
             INSPECTION_PROFILE || !softwareStop.canRequestStop || stopActive
@@ -192,25 +176,20 @@ const StatusBar = () => {
               ? "Software Stop unavailable: robot interface not configured. Not the physical E-STOP."
               : "Software stop requires Operator. It is not the physical E-STOP."
           }
-          className="rounded-lg border-2 border-statusRed bg-statusRed/10 px-3 py-1 text-xs font-bold text-statusRed transition-colors hover:bg-statusRed hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {t("Software Stop")}
-        </button>
-        {stopActive && (
-          <button
+        </SoftwareStopActionButton>
+        {showResumeNavigation && (
+          <SoftwareStopActionButton
+            active
             onClick={softwareStop.requestRelease}
             disabled={
-              !softwareStop.canReleaseStop ||
-              !softwareStop.robotState?.durable ||
-              softwareStop.robotState?.result !== "confirmed"
+              !softwareStop.canReleaseStop || stopStatus === "pending"
             }
-            title={t(
-              "Software stop release requires Engineer permission and safe robot state",
-            )}
-            className="rounded-lg border border-statusYellow px-2 py-1 text-[10px] font-bold text-statusYellow disabled:cursor-not-allowed disabled:opacity-50"
+            title={t("Resume navigation and continue the current task")}
           >
-            {t("Release software stop")}
-          </button>
+            {t("Resume navigation")}
+          </SoftwareStopActionButton>
         )}
       </div>
     </div>
