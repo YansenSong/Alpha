@@ -123,6 +123,15 @@ def _scan_node(context):
     layout = _load_lidar_mounting(vehicle_config)
     return [
         Node(
+            package='area_rules', executable='area_rules', name='area_rules',
+            output='screen', respawn=True, respawn_delay=1.0,
+            parameters=[{
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'robot_frame': layout['base_frame'],
+                'odom_topic': LaunchConfiguration('rules_odom_topic'),
+            }],
+        ),
+        Node(
             package='nav_pointcloud_filter',
             executable='self_filter_node',
             name='nav_self_filter',
@@ -182,6 +191,8 @@ def generate_launch_description():
     arguments = [
         DeclareLaunchArgument('project_dir', default_value=os.getcwd()),
         DeclareLaunchArgument('start_hardware', default_value='false'),
+        DeclareLaunchArgument('rules_odom_topic', default_value='/liorf_localization/mapping/odometry'),
+        DeclareLaunchArgument('enable_inspection_adapter', default_value='false'),
         DeclareLaunchArgument('map', default_value=''),
         DeclareLaunchArgument('map_pgm', default_value=''),
         DeclareLaunchArgument('globalmap_pcd', default_value=''),
@@ -236,6 +247,7 @@ def generate_launch_description():
             'imu_params_file': LaunchConfiguration('imu_params_file'),
             'enable_control': 'true',
             'enable_command_gate': 'true',
+            'enable_navigation_rules': 'true',
             'bridge_params_file': LaunchConfiguration('bridge_params_file'),
             'status_params_file': LaunchConfiguration('status_params_file'),
         }.items(),
@@ -293,6 +305,28 @@ def generate_launch_description():
         },
         output='screen',
     )
+    map_bundle_monitor = Node(
+        package='mission_manager', executable='map_bundle_monitor',
+        name='map_bundle_monitor', output='screen', respawn=True, respawn_delay=1.0,
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'map_yaml': LaunchConfiguration('map'),
+            'globalmap_pcd': LaunchConfiguration('globalmap_pcd'),
+        }],
+    )
+    mission_manager = Node(
+        package='mission_manager', executable='mission_manager', name='mission_manager',
+        output='screen', respawn=True, respawn_delay=1.0,
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+    inspection_adapter = Node(
+        package='inspection_adapter', executable='inspection_adapter',
+        name='inspection_adapter', output='screen', respawn=True, respawn_delay=1.0,
+        condition=IfCondition(LaunchConfiguration('enable_inspection_adapter')),
+        additional_env={'INSPECTION_PROVIDER_MODE': 'external'},
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
     return LaunchDescription(
-        arguments + [hardware, localization, planning, scan, nav_status, rviz, neupan]
+        arguments + [hardware, localization, scan, map_bundle_monitor,
+                     mission_manager, inspection_adapter, planning, nav_status, rviz, neupan]
     )

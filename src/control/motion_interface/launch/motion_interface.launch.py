@@ -94,6 +94,7 @@ def _configured_nodes(context):
                     'use_sim_time': use_sim_time,
                     'input_topic': LaunchConfiguration('input_topic'),
                     'output_topic': LaunchConfiguration('output_topic'),
+                    'navigation_rules_required': LaunchConfiguration('enable_navigation_rules'),
                 }],
             )
         )
@@ -158,6 +159,7 @@ def generate_launch_description():
                 'when enable_stm32_bridge=true.'
             ),
         ),
+        DeclareLaunchArgument('enable_navigation_rules', default_value='false'),
         DeclareLaunchArgument('enable_command_gate', default_value='true'),
         DeclareLaunchArgument('enable_stm32_bridge', default_value='true'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),

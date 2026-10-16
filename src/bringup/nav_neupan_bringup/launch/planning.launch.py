@@ -96,7 +96,8 @@ def _planner(context):
         output='screen', parameters=[configured_params])
     planner_server = Node(
         package='nav2_planner', executable='planner_server', name='planner_server',
-        output='screen', parameters=[configured_params])
+        output='screen', parameters=[configured_params],
+        remappings=[('/plan', '/planner_server/preview_plan')])
     lifecycle_manager = Node(
         package='nav2_lifecycle_manager', executable='lifecycle_manager',
         name='lifecycle_manager_planning', output='screen',
@@ -114,6 +115,7 @@ def _planner(context):
             'robot_frame': base_frame,
             'planner_action': '/compute_path_to_pose',
             'planner_id': 'GridBased',
+            'execution_path_topic': '/plan',
         }])
     return [map_server, planner_server, lifecycle_manager, bridge]
 

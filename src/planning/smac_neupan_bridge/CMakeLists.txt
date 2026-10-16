@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -21,6 +22,7 @@ add_executable(smac_neupan_bridge
 )
 
 target_include_directories(smac_neupan_bridge PRIVATE include)
+target_link_libraries(smac_neupan_bridge nlohmann_json::nlohmann_json)
 
 ament_target_dependencies(smac_neupan_bridge
   geometry_msgs

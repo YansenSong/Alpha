@@ -22,6 +22,10 @@
   <exec_depend>nav2_planner</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav_status</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
+  <exec_depend>area_rules</exec_depend>
+  <exec_depend>mission_manager</exec_depend>
+  <exec_depend>inspection_adapter</exec_depend>
   <exec_depend>nav_pointcloud_filter</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
@@ -29,6 +33,7 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>vehicle_bringup</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>

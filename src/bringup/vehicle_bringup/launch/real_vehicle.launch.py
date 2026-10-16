@@ -51,6 +51,7 @@ def _configured_components(context, motion_interface_share):
             launch_arguments={
                 'vehicle_config': vehicle_config,
                 'enable_command_gate': str(enable_command_gate).lower(),
+                'enable_navigation_rules': LaunchConfiguration('enable_navigation_rules'),
                 'enable_stm32_bridge': str(enable_control).lower(),
                 'bridge_params_file': LaunchConfiguration('bridge_params_file'),
                 'status_params_file': LaunchConfiguration('status_params_file'),
@@ -94,6 +95,7 @@ def generate_launch_description():
             default_value='false',
             description='Start the LPMS-IG1 RS232 IMU driver.',
         ),
+        DeclareLaunchArgument('enable_navigation_rules', default_value='false'),
         DeclareLaunchArgument('imu_port', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('imu_sensor_id', default_value='1'),
         DeclareLaunchArgument('imu_frame_id', default_value='imu_link'),

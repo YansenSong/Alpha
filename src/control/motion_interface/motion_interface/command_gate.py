@@ -14,13 +14,16 @@ watchdog. Hardware limits and STM32 protocol encoding belong to the downstream
 STM32 bridge in this package.
 """
 
+import copy
+import json
 import math
+import time
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.time import Time
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 class MotionCommandGate(Node):
@@ -33,6 +36,7 @@ class MotionCommandGate(Node):
         self.declare_parameter('output_topic', '/ackermann_cmd')
         self.declare_parameter('publish_rate', 20.0)
         self.declare_parameter('command_timeout', 0.5)
+        self.declare_parameter('navigation_rules_required', False)
 
         self.input_topic = self.get_parameter('input_topic').value
         self.output_topic = self.get_parameter('output_topic').value
@@ -51,6 +55,16 @@ class MotionCommandGate(Node):
         self.stop_sub = self.create_subscription(
             Bool, '/stop', self.stop_callback, 10
         )
+
+        self.navigation_rules_required = bool(self.get_parameter('navigation_rules_required').value)
+        self.area_control = None
+        self.area_received = None
+        self.rules_hold = True
+        self.rules_received = None
+        self.mission_hold = False
+        self.create_subscription(String, '/area_rules/control', self.area_callback, 10)
+        self.create_subscription(Bool, '/navigation/rules_hold', self.rules_callback, 10)
+        self.create_subscription(Bool, '/mission/hold', self.mission_callback, 10)
 
         self.command_msg: Twist | None = None
         self.last_command_time: Time | None = None
@@ -87,8 +101,43 @@ class MotionCommandGate(Node):
                 self.get_logger().info('/stop override released')
         self.stop_requested = requested
 
+    def area_callback(self, msg):
+        try:
+            control = json.loads(msg.data)
+            if not isinstance(control.get('ready'), bool) or not isinstance(control.get('stop'), bool):
+                raise ValueError('invalid area state')
+            limit = control.get('speed_limit')
+            if limit is not None and (isinstance(limit, bool) or not isinstance(limit, (int, float))
+                                      or not math.isfinite(limit) or limit <= 0):
+                raise ValueError('invalid speed limit')
+        except (ValueError, TypeError, AttributeError):
+            self.area_control = None
+            return
+        self.area_control = control
+        self.area_received = time.monotonic()
+
+    def rules_callback(self, msg):
+        self.rules_hold = bool(msg.data)
+        self.rules_received = time.monotonic()
+
+    def mission_callback(self, msg):
+        self.mission_hold = bool(msg.data)
+
+    def navigation_blocked(self):
+        now = time.monotonic()
+        area_required = self.navigation_rules_required or self.area_received is not None
+        rules_required = self.navigation_rules_required or self.rules_received is not None
+        return (
+            self.mission_hold
+            or (area_required and (self.area_control is None or self.area_received is None
+                or now - self.area_received > 0.5 or not self.area_control['ready']
+                or self.area_control['stop']))
+            or (rules_required and (self.rules_received is None
+                or now - self.rules_received > 0.5 or self.rules_hold))
+        )
+
     def timer_callback(self):
-        if self.stop_requested:
+        if self.stop_requested or self.navigation_blocked():
             command = Twist()
             source = 'stop'
         elif self.command_msg is None or self.last_command_time is None:
@@ -111,6 +160,12 @@ class MotionCommandGate(Node):
                 source = 'planner'
                 self.timeout_active = False
 
+        if source == 'planner' and self.area_control is not None:
+            limit = self.area_control['speed_limit']
+            if limit is not None and abs(command.linear.x) > limit:
+                command = copy.deepcopy(command)
+                command.linear.x = math.copysign(limit, command.linear.x)
+                # angular.z is a steering angle; preserve it when limiting speed.
         self.pub.publish(command)
         self.get_logger().debug(
             f'[{source}] v={command.linear.x:.2f} m/s, '
