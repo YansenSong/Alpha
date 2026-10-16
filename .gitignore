@@ -48,3 +48,10 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# RobotPilot frontend dependencies and generated artifacts
+/src/RobotPilot/**/node_modules/
+/src/RobotPilot/web/dist/
+/src/RobotPilot/web/coverage/
+/src/RobotPilot/web/.vite/
+/src/RobotPilot/web/*.tsbuildinfo

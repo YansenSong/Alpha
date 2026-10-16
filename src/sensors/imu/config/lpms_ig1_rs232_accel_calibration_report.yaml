@@ -1,0 +1,68 @@
+timestamp_utc: '2026-10-16T13:28:28.165402+00:00'
+gravity_m_s2: 9.80665
+poses:
+  '+X':
+    samples: 3203
+    duration_sec: 8.00263143
+    sample_rate_hz: 400.243348
+    mean_accel_m_s2: [9.8242948318, 0.0493345437292, -0.0210071095416]
+    stddev_accel_m_s2: [0.00472021224545, 0.00407809309921, 0.00376173029035]
+    mean_accel_norm_m_s2: 9.82444272954
+    orientation_error_deg: 0.312716394
+    motion_ratio: 0
+  '-X':
+    samples: 3202
+    duration_sec: 8.00055215
+    sample_rate_hz: 400.222377
+    mean_accel_m_s2: [-9.80404918847, 0.0899971306198, 0.0817855304972]
+    stddev_accel_m_s2: [0.00465925596005, 0.00480022575821, 0.00423583182139]
+    mean_accel_norm_m_s2: 9.80480544618
+    orientation_error_deg: 0.710648487
+    motion_ratio: 0
+  '+Y':
+    samples: 3203
+    duration_sec: 8.00173047
+    sample_rate_hz: 400.288414
+    mean_accel_m_s2: [-1.14960747202e-05, 9.86014286838, -0.0102460858581]
+    stddev_accel_m_s2: [0.00438588981149, 0.00372836477469, 0.003537655408]
+    mean_accel_norm_m_s2: 9.86014980202
+    orientation_error_deg: 0.0595384511
+    motion_ratio: 0
+  '-Y':
+    samples: 3203
+    duration_sec: 8.00350626
+    sample_rate_hz: 400.199599
+    mean_accel_m_s2: [-0.0551506789338, -9.76879108494, -0.0318675003952]
+    stddev_accel_m_s2: [0.00464507011232, 0.0039695255449, 0.00365765060908]
+    mean_accel_norm_m_s2: 9.76900053031
+    orientation_error_deg: 0.373581519
+    motion_ratio: 0
+  '+Z':
+    samples: 3203
+    duration_sec: 8.00373492
+    sample_rate_hz: 400.188166
+    mean_accel_m_s2: [0.0114588472762, 0.024250871667, 9.72676041762]
+    stddev_accel_m_s2: [0.00441198227909, 0.00409275187459, 0.00360294784145]
+    mean_accel_norm_m_s2: 9.72679926022
+    orientation_error_deg: 0.157994342
+    motion_ratio: 0
+  '-Z':
+    samples: 3200
+    duration_sec: 7.99773461
+    sample_rate_hz: 400.113302
+    mean_accel_m_s2: [-0.00604769901787, 0.0744299181124, -9.78821983156]
+    stddev_accel_m_s2: [0.00441467797408, 0.00412652637951, 0.0035369743828]
+    mean_accel_norm_m_s2: 9.78850654421
+    orientation_error_deg: 0.437106193
+    motion_ratio: 0
+result:
+  accel_offset_m_s2: [0.0101228216652, 0.0456758917221, -0.0307297069694]
+  accel_gain: [0.999233556317, 0.999203525094, 1.00503816809]
+  maximum_off_axis_residual_m_s2: 0.113082108146
+  validation:
+    '+X': [9.80665, 0.00365573798254, 0.00977158150787]
+    '-X': [-9.80665, 0.0442859381431, 0.113082108146]
+    '+Y': [-0.0101265503561, 9.80665, 0.0205868210375]
+    '-Y': [-0.0652234721368, -9.80665, -0.00114352582034]
+    '+Z': [0.0013350016226, -0.0214079555643, 9.80665]
+    '-Z': [-0.0161581268897, 0.0287311245298, -9.80665]

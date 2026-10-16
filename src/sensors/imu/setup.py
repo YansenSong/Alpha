@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer="young",
     maintainer_email="young@example.com",
-    description="LPMS-IG1 CANopen 16-bit SocketCAN to standard ROS 2 IMU topics",
+    description="LPMS-IG1 RS232 LP-BUS to standard ROS 2 IMU topics",
     license="MIT",
     entry_points={
         "console_scripts": [

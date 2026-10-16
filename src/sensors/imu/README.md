@@ -1,112 +1,41 @@
-# imu
+# LPMS-IG1 RS232
 
-LPMS-IG1 CANopen 16-bit driver using Linux SocketCAN directly.
-
-## Topics
-
-- `/imu/data` — `sensor_msgs/msg/Imu`
-  - LPMS fused quaternion orientation
-  - angular velocity in rad/s
-  - acceleration in m/s^2
-- `/imu/data_raw` — `sensor_msgs/msg/Imu`
-  - gyro + acceleration
-  - orientation marked unavailable (`orientation_covariance[0] = -1`)
-- `/imu/mag` — `sensor_msgs/msg/MagneticField`
-  - magnetic field in Tesla
-- `/imu/connected` — `std_msgs/msg/Bool`
-  - `true` only while complete IMU samples arrive within `data_timeout_sec`
-
-## CAN recovery
-
-The driver retries opening `can0` if it is unavailable at startup. It also
-reopens the SocketCAN socket after a receive error or a period without a
-complete IMU sample. `config/lpms_ig1.yaml` sets `auto_reconnect`,
-`reconnect_interval_sec`, `data_timeout_sec`, and `status_period_sec`. Both the
-package launch file and `vehicle_bringup` load this configuration before the
-calibration file.
-
-Use the `/imu/enable_auto_reconnect` (`std_srvs/srv/SetBool`) service to enable
-or disable retries while the node is running. `/imu/connected` continues to
-report sample freshness when retries are disabled.
-
-## Default device settings assumed
-
-- SocketCAN interface: `can0`
-- LPMS CANopen node ID: `5`
-- 16-bit CAN mapping:
-  - `0x185`: calibrated accel XYZ + aligned Gyro II X
-  - `0x285`: aligned Gyro II YZ + calibrated mag XY
-  - `0x385`: calibrated mag Z + Euler RPY
-  - `0x485`: quaternion WXYZ
-
-If the CAN mapping has been changed in IG1Control, update the decoder.
-
-## ROS convention conversions
-
-By default:
-
-1. Acceleration is sign-inverted and converted from g to m/s^2.
-   With the sensor stationary and its +Z axis upward, ROS output should be
-   approximately `+9.80665 m/s^2` on Z.
-
-2. Gyroscope is converted from deg/s to rad/s.
-
-3. Magnetometer is converted from microtesla to tesla.
-
-4. LPMS magnetic world convention NWU (north-west-up) is converted to
-   ROS ENU (east-north-up) for the fused quaternion.
-
-The NWU->ENU conversion can be disabled with:
-`convert_nwu_to_enu:=false`.
-
-## Build
-
-Copy this package into a ROS 2 workspace:
+ROS 2 driver for binary LP-BUS over USB/RS232, using Linux termios (8N1).
+Default: `/dev/ttyUSB0`, 921600 baud, sensor ID 1. CANopen support has been removed.
 
 ```bash
-mkdir -p ~/ros2_ws/src
-cp -r imu ~/ros2_ws/src/
-
-cd ~/ros2_ws
-source /opt/ros/$ROS_DISTRO/setup.bash
+source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select imu
 source install/setup.bash
+ros2 launch imu lpms_ig1.launch.py port:=/dev/ttyUSB0 baudrate:=921600
 ```
 
-## Bring up CAN
+Use `/dev/serial/by-id/...` for a stable port path. Parameters `port`, `baudrate`
+and `sensor_id` are launch arguments. No hardware settings are changed or saved:
+the driver queries commands 31, 35, 37 and 137 on connection to discover the
+transmit mask, configured rate, angular units and precision. Missing replies
+prevent publishing; the driver reconnects after `data_timeout_sec`.
+Only 32-bit floating point LP-BUS mode is currently supported. Required enabled
+fields are calibrated acceleration (bit 1), aligned Gyro II (bit 7), calibrated
+magnetometer (bit 9) and quaternion (bit 11). Other known fields are skipped
+according to the queried mask; payload length and finite values are checked.
 
-Example for 500 kbit/s:
+Topics: `/imu/data`, `/imu/data_raw`, `/imu/mag`, `/imu/connected`.
+Raw means converted SI data before user calibration, not uncalibrated chip data.
+Acceleration defaults to sign inversion and g -> m/s²; gyro respects queried
+rad/degree mode; magnetometer converts µT -> T. LPMS quaternion WXYZ is
+conjugated following the IG1 ROS example, then optionally rotated NWU -> ENU.
+Confirm physical axes and heading with controlled rotations before navigation.
+ROS timestamps use host reception time, not the device counter.
 
-```bash
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 500000
-sudo ip link set can0 up
-ip -details link show can0
-```
+Reconnect is controlled by `auto_reconnect`, `reconnect_interval_sec`,
+`data_timeout_sec`, and `/imu/enable_auto_reconnect` (SetBool).
+The launch uses neutral user calibration by default. Pass `params_file:=...`
+to load newly measured calibration. Previous device calibration was removed.
 
-## Run
-
-```bash
-ros2 launch imu lpms_ig1.launch.py
-```
-
-Or:
-
-```bash
-ros2 run imu lpms_ig1_node --ros-args \
-  -p interface:=can0 \
-  -p node_id:=5 \
-  -p frame_id:=imu_link
-```
-
-## Inspect
-
-```bash
-ros2 topic list | grep imu
-ros2 topic hz /imu/data
-ros2 topic echo /imu/data --once
-ros2 topic echo /imu/mag --once
-```
+References: [IG1 protocol registers](https://github.com/GPrathap/lpmsig1opensourcelib/blob/main/LpmsIG1Registers.h),
+[payload decoding](https://github.com/GPrathap/lpmsig1opensourcelib/blob/main/SensorData.h),
+[quaternion convention example](https://github.com/GPrathap/lpmsig1opensourcelib/blob/main/ros2_example/src/lpms_ig1_node.cpp).
 
 ## Static gyroscope calibration
 
@@ -177,11 +106,7 @@ ros2 launch imu lpms_ig1.launch.py \
   params_file:=$HOME/.ros/lpms_ig1_calibration.yaml
 ```
 
-The calibration measured for this project IMU is versioned at
-`config/lpms_ig1_calibration.yaml`, with its acquisition report at
-`config/lpms_ig1_accel_calibration_report.yaml`. The real-vehicle bringup uses
-the versioned calibration by default so the same sensor can be moved to another
-computer without recalibrating. Recalibrate if the physical IMU unit changes.
+Calibration is specific to the physical sensor. Generate new calibration for this RS232 unit.
 
 The topic semantics are:
 
@@ -242,5 +167,5 @@ from `base_link` to `imu_link`. For a ROS-standard robot body frame use:
 - +Y left
 - +Z up
 
-Do not fake the mounting orientation by permuting CAN bytes unless you have a
+Do not fake the mounting orientation by permuting sensor axes unless you have a
 specific reason; represent mounting with TF or LPMS Object Reset.

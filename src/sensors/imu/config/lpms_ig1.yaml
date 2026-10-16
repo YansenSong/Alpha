@@ -1,7 +1,8 @@
 lpms_ig1_node:
   ros__parameters:
-    interface: can0
-    node_id: 5
+    port: /dev/ttyUSB0
+    baudrate: 921600
+    sensor_id: 1
     frame_id: imu_link
 
     # LPMS calibrated acceleration observed at rest is approximately -1 g on +Z.

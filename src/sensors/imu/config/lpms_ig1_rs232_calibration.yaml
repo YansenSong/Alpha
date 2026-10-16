@@ -1,0 +1,11 @@
+lpms_ig1_node:
+  ros__parameters:
+    gyro_bias_x: 1.42816227641e-06
+    gyro_bias_y: 8.60383094601e-07
+    gyro_bias_z: -7.79095758379e-07
+    accel_offset_x: 0.0101228216652
+    accel_offset_y: 0.0456758917221
+    accel_offset_z: -0.0307297069694
+    accel_gain_x: 0.999233556317
+    accel_gain_y: 0.999203525094
+    accel_gain_z: 1.00503816809

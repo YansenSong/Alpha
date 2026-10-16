@@ -2,7 +2,7 @@
 <package format="3">
   <name>imu</name>
   <version>0.1.0</version>
-  <description>LPMS-IG1 CANopen 16-bit SocketCAN driver for standard ROS 2 IMU topics.</description>
+  <description>LPMS-IG1 RS232 LP-BUS driver for standard ROS 2 IMU topics.</description>
 
   <maintainer email="young@example.com">young</maintainer>
   <license>MIT</license>

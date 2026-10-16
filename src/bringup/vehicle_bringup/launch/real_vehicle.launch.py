@@ -92,15 +92,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_imu',
             default_value='false',
-            description='Start the LPMS-IG1 SocketCAN IMU driver.',
+            description='Start the LPMS-IG1 RS232 IMU driver.',
         ),
-        DeclareLaunchArgument('imu_interface', default_value='can0'),
-        DeclareLaunchArgument('imu_node_id', default_value='5'),
+        DeclareLaunchArgument('imu_port', default_value='/dev/ttyUSB0'),
+        DeclareLaunchArgument('imu_sensor_id', default_value='1'),
         DeclareLaunchArgument('imu_frame_id', default_value='imu_link'),
         DeclareLaunchArgument(
             'imu_params_file',
             default_value=os.path.join(
-                imu_share, 'config', 'lpms_ig1_calibration.yaml'
+                imu_share, 'config', 'lpms_ig1_rs232_calibration.yaml'
             ),
             description='LPMS-IG1 software calibration parameter file.',
         ),
@@ -159,9 +159,9 @@ def generate_launch_description():
             os.path.join(imu_share, 'config', 'lpms_ig1.yaml'),
             LaunchConfiguration('imu_params_file'),
             {
-                'interface': LaunchConfiguration('imu_interface'),
-                'node_id': ParameterValue(
-                    LaunchConfiguration('imu_node_id'), value_type=int
+                'port': LaunchConfiguration('imu_port'),
+                'sensor_id': ParameterValue(
+                    LaunchConfiguration('imu_sensor_id'), value_type=int
                 ),
                 'frame_id': LaunchConfiguration('imu_frame_id'),
                 'invert_accel_for_ros': True,

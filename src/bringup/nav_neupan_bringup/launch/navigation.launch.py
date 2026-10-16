@@ -191,13 +191,13 @@ def generate_launch_description():
             'lidar_config',
             default_value=os.path.join(lidar_share, 'config', 'config.yaml')),
         DeclareLaunchArgument('enable_imu', default_value='false'),
-        DeclareLaunchArgument('imu_interface', default_value='can0'),
-        DeclareLaunchArgument('imu_node_id', default_value='5'),
+        DeclareLaunchArgument('imu_port', default_value='/dev/ttyUSB0'),
+        DeclareLaunchArgument('imu_sensor_id', default_value='1'),
         DeclareLaunchArgument(
             'imu_params_file',
             default_value=os.path.join(
                 get_package_share_directory('imu'),
-                'config', 'lpms_ig1_calibration.yaml')),
+                'config', 'lpms_ig1_rs232_calibration.yaml')),
         DeclareLaunchArgument(
             'bridge_params_file',
             default_value=os.path.join(
@@ -231,8 +231,8 @@ def generate_launch_description():
             'lidar_config': LaunchConfiguration('lidar_config'),
             'lidar_rviz': 'false',
             'enable_imu': LaunchConfiguration('enable_imu'),
-            'imu_interface': LaunchConfiguration('imu_interface'),
-            'imu_node_id': LaunchConfiguration('imu_node_id'),
+            'imu_port': LaunchConfiguration('imu_port'),
+            'imu_sensor_id': LaunchConfiguration('imu_sensor_id'),
             'imu_params_file': LaunchConfiguration('imu_params_file'),
             'enable_control': 'true',
             'enable_command_gate': 'true',

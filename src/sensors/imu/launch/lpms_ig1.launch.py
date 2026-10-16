@@ -59,7 +59,7 @@ def generate_launch_description():
     default_params_file = os.path.join(
         get_package_share_directory("imu"),
         "config",
-        "lpms_ig1_calibration.yaml",
+        "lpms_ig1_rs232_calibration.yaml",
     )
     default_mounting_file = os.path.join(
         get_package_share_directory("imu"), "config", "lpms_ig1_mounting.yaml"
@@ -68,8 +68,9 @@ def generate_launch_description():
         DeclareLaunchArgument("params_file", default_value=default_params_file),
         DeclareLaunchArgument("publish_static_tf", default_value="true"),
         DeclareLaunchArgument("mounting_file", default_value=default_mounting_file),
-        DeclareLaunchArgument("interface", default_value="can0"),
-        DeclareLaunchArgument("node_id", default_value="5"),
+        DeclareLaunchArgument("port", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("baudrate", default_value="921600"),
+        DeclareLaunchArgument("sensor_id", default_value="1"),
         DeclareLaunchArgument("frame_id", default_value="imu_link"),
         DeclareLaunchArgument("invert_accel_for_ros", default_value="true"),
         DeclareLaunchArgument("convert_nwu_to_enu", default_value="true"),
@@ -83,8 +84,9 @@ def generate_launch_description():
                 base_params_file,
                 LaunchConfiguration("params_file"),
                 {
-                    "interface": LaunchConfiguration("interface"),
-                    "node_id": LaunchConfiguration("node_id"),
+                    "port": LaunchConfiguration("port"),
+                    "baudrate": LaunchConfiguration("baudrate"),
+                    "sensor_id": LaunchConfiguration("sensor_id"),
                     "frame_id": LaunchConfiguration("frame_id"),
                     "invert_accel_for_ros": LaunchConfiguration(
                         "invert_accel_for_ros"

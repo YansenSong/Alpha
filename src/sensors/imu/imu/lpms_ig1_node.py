@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 import math
-import socket
-import struct
 import time
 
 import rclpy
@@ -11,18 +9,10 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, MagneticField
 from std_msgs.msg import Bool
 from std_srvs.srv import SetBool
+from imu.lpbus import SerialBus
 
 
 G0 = 9.80665
-
-CAN_EFF_MASK = 0x1FFFFFFF
-CAN_SFF_MASK = 0x000007FF
-CAN_RTR_FLAG = 0x40000000
-CAN_ERR_FLAG = 0x20000000
-
-CAN_FRAME_FMT = "=IB3x8s"
-CAN_FRAME_SIZE = struct.calcsize(CAN_FRAME_FMT)
-
 
 def quaternion_multiply_wxyz(q1, q2):
     """Hamilton product, both quaternions are (w, x, y, z)."""
@@ -44,38 +34,14 @@ def quaternion_normalize_wxyz(q):
 
 
 class LpmsIg1Ros2(Node):
-    """
-    LPMS-IG1 CANopen 16-bit -> ROS 2 sensor_msgs driver.
-
-    Default CAN mapping used:
-      0x180 + node_id: AccCal X/Y/Z, GyroII AlignCal X
-      0x280 + node_id: GyroII AlignCal Y/Z, MagCal X/Y
-      0x380 + node_id: MagCal Z, Euler Roll/Pitch/Yaw
-      0x480 + node_id: Quaternion W/X/Y/Z
-
-    Publishes:
-      imu/data_raw : sensor_msgs/msg/Imu
-      imu/data     : sensor_msgs/msg/Imu
-      imu/mag      : sensor_msgs/msg/MagneticField
-
-    ROS conversions:
-      acceleration: g -> m/s^2, and optionally sign inverted so a stationary
-                    IMU with +Z up reports +9.80665 m/s^2 on Z (REP-145)
-      gyro:         deg/s -> rad/s
-      magnetometer: microtesla -> tesla
-      quaternion:   optionally LPMS NWU world reference -> ROS ENU world reference
-
-    NOTE:
-      This driver keeps measurements expressed in the LPMS sensor/body axes.
-      Use a static TF from base_link -> imu_link (or LPMS Object Reset) to describe
-      how the IMU is mounted on the robot.
-    """
+    """LPMS-IG1 RS232 LP-BUS to standard ROS 2 topics."""
 
     def __init__(self):
         super().__init__("lpms_ig1_node")
 
-        self.declare_parameter("interface", "can0")
-        self.declare_parameter("node_id", 5)
+        self.declare_parameter("port", "/dev/ttyUSB0")
+        self.declare_parameter("baudrate", 921600)
+        self.declare_parameter("sensor_id", 1)
         self.declare_parameter("frame_id", "imu_link")
         self.declare_parameter("poll_period_sec", 0.001)
         self.declare_parameter("auto_reconnect", True)
@@ -113,8 +79,12 @@ class LpmsIg1Ros2(Node):
         self.declare_parameter("accel_gain_y", 1.0)
         self.declare_parameter("accel_gain_z", 1.0)
 
-        self.interface = str(self.get_parameter("interface").value)
-        self.node_id = int(self.get_parameter("node_id").value)
+        self.port = str(self.get_parameter("port").value)
+        self.baudrate = int(self.get_parameter("baudrate").value)
+        self.sensor_id = int(self.get_parameter("sensor_id").value)
+        if not 1 <= self.sensor_id <= 65535:
+            raise ValueError("sensor_id must be 1..65535")
+        self.serial_settings_reported = False
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.poll_period = float(self.get_parameter("poll_period_sec").value)
         self.auto_reconnect = bool(self.get_parameter("auto_reconnect").value)
@@ -141,8 +111,6 @@ class LpmsIg1Ros2(Node):
             float(self.get_parameter("accel_gain_z").value),
         )
 
-        if not (1 <= self.node_id <= 127):
-            raise ValueError("node_id must be in the CANopen range 1..127")
         for name, value in (
             ("poll_period_sec", self.poll_period),
             ("reconnect_interval_sec", self.reconnect_interval),
@@ -155,13 +123,6 @@ class LpmsIg1Ros2(Node):
             raise ValueError("accelerometer offsets must be finite")
         if not all(math.isfinite(value) and value > 0.0 for value in self.accel_gain):
             raise ValueError("accelerometer gains must be finite and > 0")
-
-        self.ids = {
-            0x180 + self.node_id: 1,
-            0x280 + self.node_id: 2,
-            0x380 + self.node_id: 3,
-            0x480 + self.node_id: 4,
-        }
 
         self.pub_raw = self.create_publisher(
             Imu, "imu/data_raw", qos_profile_sensor_data
@@ -182,20 +143,14 @@ class LpmsIg1Ros2(Node):
         self.last_complete_sample_at = None
         self.next_reconnect_at = 0.0
         self.last_reported_connected = None
-        self.values = {}
-        self.mask = 0
 
         self.try_connect(force=True)
-        self.timer = self.create_timer(self.poll_period, self.poll_can)
+        self.timer = self.create_timer(self.poll_period, self.poll_serial)
         self.status_timer = self.create_timer(
             self.status_period, self.publish_connection_status
         )
 
-        ids_text = ", ".join(f"0x{x:03X}" for x in self.ids)
-        self.get_logger().info(
-            f"LPMS-IG1 on {self.interface}, node_id={self.node_id}, "
-            f"frame_id={self.frame_id}, CAN IDs=[{ids_text}]"
-        )
+        self.get_logger().info(f"LPMS-IG1 RS232 on {self.port}, baudrate={self.baudrate}")
         self.get_logger().info(
             f"ROS conversion: invert_accel={self.invert_accel}, "
             f"NWU->ENU orientation={self.nwu_to_enu}"
@@ -224,9 +179,7 @@ class LpmsIg1Ros2(Node):
 
         new_sock = None
         try:
-            new_sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-            new_sock.setblocking(False)
-            new_sock.bind((self.interface,))
+            new_sock = SerialBus(self.port, self.baudrate, self.sensor_id)
         except OSError as exc:
             if new_sock is not None:
                 try:
@@ -235,16 +188,15 @@ class LpmsIg1Ros2(Node):
                     pass
             self.next_reconnect_at = now + self.reconnect_interval
             self.get_logger().error(
-                f"Cannot open CAN interface {self.interface}: {exc}"
+                f"Cannot open serial port {self.port}: {exc}"
             )
             return False
 
         self.sock = new_sock
         self.socket_connected_at = time.monotonic()
         self.last_complete_sample_at = None
-        self.values = {}
-        self.mask = 0
-        self.get_logger().info(f"Bound CAN interface {self.interface}")
+        self.serial_settings_reported = False
+        self.get_logger().info(f"Connected serial port {self.port}")
         return True
 
     def close_socket(self):
@@ -252,18 +204,16 @@ class LpmsIg1Ros2(Node):
         self.sock = None
         self.socket_connected_at = None
         self.last_complete_sample_at = None
-        self.values = {}
-        self.mask = 0
         if sock is not None:
             try:
                 sock.close()
             except OSError as exc:
-                self.get_logger().warning(f"CAN socket close failed: {exc}")
+                self.get_logger().warning(f"IMU transport close failed: {exc}")
 
     def disconnect(self, reason):
         self.close_socket()
         self.next_reconnect_at = time.monotonic() + self.reconnect_interval
-        self.get_logger().warning(f"CAN disconnected: {reason}")
+        self.get_logger().warning(f"IMU disconnected: {reason}")
 
     def set_auto_reconnect(self, request, response):
         enabled = bool(request.data)
@@ -280,8 +230,8 @@ class LpmsIg1Ros2(Node):
             self.next_reconnect_at = 0.0
         response.success = True
         response.message = (
-            "CAN auto reconnect enabled" if self.auto_reconnect
-            else "CAN auto reconnect disabled"
+            "IMU auto reconnect enabled" if self.auto_reconnect
+            else "IMU auto reconnect disabled"
         )
         self.get_logger().info(response.message)
         return response
@@ -315,60 +265,6 @@ class LpmsIg1Ros2(Node):
             else:
                 self.get_logger().warning("IMU data unavailable")
             self.last_reported_connected = connected
-
-    @staticmethod
-    def unpack_i16x4(data):
-        if len(data) != 8:
-            raise ValueError("LPMS 16-bit CAN frame must contain 8 data bytes")
-        return struct.unpack("<hhhh", data)
-
-    def decode_frame(self, can_id, data):
-        group = self.ids.get(can_id)
-        if group is None or len(data) != 8:
-            return
-
-        a, b, c, d = self.unpack_i16x4(data)
-
-        # A new TPDO1 marks a new sample set. If the prior set was incomplete,
-        # discard it instead of mixing frames from different samples.
-        if group == 1:
-            self.mask = 0
-            self.values = {}
-            self.values["ax_g"] = a / 1000.0
-            self.values["ay_g"] = b / 1000.0
-            self.values["az_g"] = c / 1000.0
-            self.values["gx_dps"] = d / 10.0
-            self.mask |= 0b0001
-
-        elif group == 2:
-            self.values["gy_dps"] = a / 10.0
-            self.values["gz_dps"] = b / 10.0
-            self.values["mx_uT"] = c / 100.0
-            self.values["my_uT"] = d / 100.0
-            self.mask |= 0b0010
-
-        elif group == 3:
-            self.values["mz_uT"] = a / 100.0
-            # Euler is decoded for completeness/debugging but the ROS Imu
-            # orientation field is populated from the quaternion.
-            self.values["roll_deg"] = b / 100.0
-            self.values["pitch_deg"] = c / 100.0
-            self.values["yaw_deg"] = d / 100.0
-            self.mask |= 0b0100
-
-        elif group == 4:
-            self.values["qw"] = a / 10000.0
-            self.values["qx"] = b / 10000.0
-            self.values["qy"] = c / 10000.0
-            self.values["qz"] = d / 10000.0
-            self.mask |= 0b1000
-
-            if self.mask == 0b1111:
-                self.publish_sample(self.values)
-                self.last_complete_sample_at = time.monotonic()
-
-            self.mask = 0
-            self.values = {}
 
     @staticmethod
     def diag_covariance(stddev):
@@ -481,32 +377,19 @@ class LpmsIg1Ros2(Node):
 
         self.pub_mag.publish(mag)
 
-    def poll_can(self):
+    def poll_serial(self):
         if self.sock is None:
             self.try_connect()
             return
-        while rclpy.ok():
-            try:
-                frame = self.sock.recv(CAN_FRAME_SIZE)
-            except BlockingIOError:
-                return
-            except OSError as exc:
-                self.disconnect(f"receive error: {exc}")
-                return
-
-            if len(frame) != CAN_FRAME_SIZE:
-                continue
-
-            can_id_raw, dlc, data = struct.unpack(CAN_FRAME_FMT, frame)
-
-            if can_id_raw & (CAN_RTR_FLAG | CAN_ERR_FLAG):
-                continue
-
-            can_id = can_id_raw & CAN_EFF_MASK
-            if can_id <= CAN_SFF_MASK:
-                can_id &= CAN_SFF_MASK
-
-            self.decode_frame(can_id, data[:dlc])
+        try:
+            for sample in self.sock.samples():
+                self.publish_sample(sample)
+                self.last_complete_sample_at = time.monotonic()
+            if len(self.sock.settings) == 4 and not self.serial_settings_reported:
+                self.get_logger().info(f"LP-BUS settings: {self.sock.settings}")
+                self.serial_settings_reported = True
+        except (OSError, ValueError) as exc:
+            self.disconnect(f"serial receive/decode error: {exc}")
 
     def destroy_node(self):
         try:
@@ -525,7 +408,10 @@ def main(args=None):
         pass
     finally:
         if node is not None:
-            node.destroy_node()
+            try:
+                node.destroy_node()
+            except KeyboardInterrupt:
+                pass
         if rclpy.ok():
             rclpy.shutdown()
 
