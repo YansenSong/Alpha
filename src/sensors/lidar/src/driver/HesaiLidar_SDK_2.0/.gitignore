@@ -1,0 +1,6 @@
+.vscode
+build
+.cursor
+.clang*
+.cache
+compile_commands.json
