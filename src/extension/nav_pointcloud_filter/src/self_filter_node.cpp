@@ -24,15 +24,24 @@ public:
     front_ = declare_parameter<double>("front_extent", 0.0);
     rear_ = declare_parameter<double>("rear_extent", 0.0);
     half_width_ = declare_parameter<double>("half_width", 0.0);
+    // Offset of the rejection box from the measured footprint. Positive shrinks
+    // the box, which is what the navigation scan wants: it keeps the outer skin
+    // of the vehicle visible so /scan still shows the vehicle edges. Negative
+    // grows the box, which is what a self filter wants: the footprint is taped
+    // to +/-1 cm, so swallowing a margin of skin needs the box slightly larger
+    // than the nominal body. The membership test below is written as
+    // "-rear_ + inset_" / "front_ - inset_" / "half_width_ - inset_", so a
+    // negative value already widens it correctly.
     inset_ = declare_parameter<double>("xy_inset", 0.02);
     min_z_ = declare_parameter<double>("min_z", -0.05);
     max_z_ = declare_parameter<double>("max_z", 0.0);
     if (base_frame_.empty() || !std::isfinite(front_) || !std::isfinite(rear_) ||
       !std::isfinite(half_width_) || !std::isfinite(inset_) ||
       !std::isfinite(min_z_) || !std::isfinite(max_z_) || front_ <= inset_ ||
-      rear_ <= inset_ || half_width_ <= inset_ || inset_ < 0.0 || min_z_ >= max_z_)
+      rear_ <= inset_ || half_width_ <= inset_ || inset_ < -0.5 ||
+      min_z_ >= max_z_)
     {
-      throw std::invalid_argument("Invalid navigation self-filter body bounds");
+      throw std::invalid_argument("Invalid point cloud self-filter body bounds");
     }
 
     auto qos = rclcpp::SensorDataQoS();

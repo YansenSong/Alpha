@@ -79,6 +79,12 @@ vehicle:
     #   height_above_ground         is measured from the ground plane
     # They are related by frames.base_height_above_ground.
     #
+    # Both sensors were measured on 2026-10-16 from the REAR AXLE CENTRE, not
+    # from the ground. The axle centre sits wheel_radius (0.200 m, geometry
+    # above) above the ground, so height_above_ground = measurement + 0.200.
+    # That axle height assumes the loaded tyre does not squat; if the vehicle is
+    # ever corner-weighed, re-check it.
+    #
     # Two independent consumers read these:
     #   - pointcloud_to_laserscan's height slice uses height_above_ground: the
     #     ground plane lands at -height_above_ground in laser_link, so
@@ -92,31 +98,97 @@ vehicle:
     # navigation modes run with LIDAR_RVIZ=false, so the stack had no laser_link
     # TF at all and NeuPAN blocked on lookup_transform(map, laser_link).
     lidar:
-      # x/y/z measured on the vehicle on 2026-09-15. The rotations are assumed.
-      status: "PARTIALLY VERIFIED"
+      # Re-measured on the vehicle 2026-10-16, after the sensor was remounted:
+      # position by tape, orientation by the target test described below. This
+      # supersedes the previous 2026-09-15 mounting. The 0.200 m wheel radius
+      # that the axle height is derived from is the same 2026-09-15 measurement
+      # quoted in docs/轮式里程计对接需求_下位机确认清单.md:134 and is unchanged.
+      #
+      # Every MOUNTING value here is measured. ground_margin is the one field
+      # that is not, and it is documented as a carry-over at its own key below.
+      status: "VERIFIED"
 
-      # The LiDAR sits above the front-axle area, 1.01 m forward of the rear
-      # axle centre and 0.84 m above the ground. Note 1.01 > wheelbase 0.960, so
-      # it is 5 cm ahead of the front axle rather than directly above it.
-      x: 1.01
+      # 0.62 m forward of the rear axle centre, 1.20 m above the ground
+      # (1.00 m above the axle centre + 0.200 m axle height).
+      #
+      # Note the remount moved the LiDAR from x 1.01 / height 0.84 to here.
+      # 0.62 < wheelbase 0.960, so it now sits well BEHIND the front axle; the
+      # old note about it being 5 cm ahead of the front axle no longer applies.
+      # y is 0.0: the LiDAR is on the centreline.
+      x: 0.62
       y: 0.0
-      height_above_ground: 0.84
+      height_above_ground: 1.20
 
-      # ASSUMED zero (installed level and facing forward); NOT measured.
-      # Degrees, matching max_steering_angle_deg above; the launch converts to
-      # radians for static_transform_publisher.
-      # yaw is the one to check first: a few degrees rotates the whole /scan
-      # relative to the chassis, which shifts every obstacle bearing and is easy
-      # to miss. Confirm before flipping status to VERIFIED.
+      # Confirmed by the installer 2026-10-16: installed level and square to the
+      # chassis. Degrees, matching max_steering_angle_deg above; the launch
+      # converts to radians for static_transform_publisher.
+      #
+      # yaw_deg is 90.0, NOT 0.0, and that is the whole point of this block.
+      # "Square to the chassis" describes the HOUSING; these fields describe the
+      # orientation of the frame the published cloud is stamped with, and the
+      # driver publishes the RAW Hesai frame -- sensors/lidar/config/config.yaml
+      # has transform_flag false with x/y/z/rpy all zero, so no correction is
+      # applied by the driver. The SDK builds points as
+      # x = cos(el)*sin(az), y = cos(el)*cos(az)
+      # (HesaiLidar_SDK_2.0/libhesai/UdpParser/include/general_parser.h:531), so
+      # azimuth 0 deg lies along the raw +Y axis.
+      #
+      # Measured on the vehicle 2026-10-16 by clicking targets in /lidar_points
+      # (RViz fixed frame laser_link, scripts/start_vehicle.sh lidar) and reading
+      # their coordinates in the raw frame:
+      #   target straight ahead:  (-0.514, -3.73, 1.02)
+      #   target to front-left:   ( 1.53,  -3.71, 1.08)
+      # Both sit at the same depth on raw -y and differ on raw +x, and the
+      # front-left target is the one at larger raw x. So on this vehicle:
+      #   raw -y = vehicle forward   (raw +y points AFT)
+      #   raw +x = vehicle LEFT
+      #   raw +z = up
+      # laser_link is therefore frames.base rotated by +90 deg about z:
+      # Rz(90) maps base axes (x forward, y left) onto laser axes (x left,
+      # y aft), which is exactly the measured mapping. Re-run the target test
+      # before changing this number on a different airframe.
       roll_deg: 0.0
       pitch_deg: 0.0
-      yaw_deg: 0.0
+      yaw_deg: 90.0
 
       # Slice the scan this far below the measured height so a few cm of
       # ground-plane noise does not enter it. Carried over from the simulation
-      # tuning (0.484 - 0.084 = -0.40 in laser_link); re-check it against the
-      # real lidar now that height_above_ground is measured rather than assumed.
+      # tuning (0.484 - 0.084 = -0.40 in laser_link); with height_above_ground
+      # measured at 1.20 the derived slice is now -1.116 in laser_link.
+      #
+      # This is the one value in this block that is still a carry-over rather
+      # than a measurement. It is left as-is because the semantics hold at any
+      # LiDAR height -- it keeps the slice 0.084 m above the ground -- but the
+      # clearance itself has not been checked against real ground returns, so
+      # re-check it if the scan shows the ground plane or drops low obstacles.
       ground_margin: 0.084
+
+    # Measured 2026-10-16, same datum and conventions as the lidar block above.
+    #
+    # Nothing consumes this block yet: frames.imu is declared, but no node on
+    # the real vehicle publishes an imu_link TF (the standalone
+    # sensors/imu mounting_calibration tool is the only thing that ever did, and
+    # it is not part of any launch). LIORF/LIO-SAM take the LiDAR->IMU
+    # extrinsics as parameters rather than as a TF, so imu_link has no parent in
+    # the running tree. It is recorded here because it is the second half of the
+    # extrinsic measurement below: sensor_extrinsics.lidar_to_imu.translation_xyz
+    # must equal imu position - lidar position, and having both written down is
+    # what makes that check possible.
+    imu:
+      status: "VERIFIED"
+
+      # 0.14 m forward of the rear axle centre, 0.46 m above the ground
+      # (0.26 m above the axle centre + 0.200 m axle height).
+      #
+      # X+ points to the vehicle's nose with no yaw and Z+ is up (confirmed by
+      # the installer 2026-10-16), so the body axes are the ROS convention:
+      # x forward, y left, z up. Also on the centreline, so y is 0.0.
+      x: 0.14
+      y: 0.0
+      height_above_ground: 0.46
+      roll_deg: 0.0
+      pitch_deg: 0.0
+      yaw_deg: 0.0
 
   sensor_extrinsics:
     # Single source for the LiDAR/IMU calibration consumed by both LIORF and
@@ -128,17 +200,57 @@ vehicle:
     #   rotation_matrix -> extrinsicRot
     #   orientation_matrix -> extrinsicRPY
     lidar_to_imu:
-      status: "NOT VERIFIED"
+      status: "VERIFIED"
+
+      # All three fields are expressed in the LiDAR frame, which on this vehicle
+      # is NOT body-aligned: it is rotated +90 deg about z from frames.base, so
+      # raw +x is the vehicle's left and raw -y is its forward (derivation in
+      # sensor_mounting.lidar above). Every component below follows from that
+      # rotation, so revisit them together if laser_link ever changes.
 
       # LiDAR origin -> IMU origin translation [x, y, z], expressed in the
       # LiDAR frame, in metres.
-      translation_xyz: null
+      #
+      # Geometrically the IMU is 0.48 m behind and 0.74 m below the LiDAR, on
+      # the same centreline (see sensor_mounting above). In laser_link the
+      # rearward 0.48 m lands on +y, because raw +y points aft.
+      translation_xyz: [0.0, 0.48, -0.74]
 
       # Row-major 3x3 matrix used to rotate IMU acceleration/gyro vectors into
       # the LiDAR convention (LIO-SAM/LIORF extrinsicRot).
-      rotation_matrix: null
+      #
+      # The IMU frame is body-aligned (x forward, y left, z up -- see
+      # sensor_mounting.imu), the LiDAR frame is not, so this is the same +90 deg
+      # relabelling as the mounting yaw: Rz(-90). Concretely, a vector pointing
+      # along the vehicle's forward axis has IMU components (1, 0, 0) and LiDAR
+      # components (0, -1, 0), which is what this matrix returns.
+      rotation_matrix: [0.0, 1.0, 0.0,
+                        -1.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0]
 
       # Row-major 3x3 IMU orientation correction matrix
       # (LIO-SAM/LIORF extrinsicRPY). Keep separate from rotation_matrix because
       # some IMUs use different attitude and vector axis conventions.
-      orientation_matrix: null
+      #
+      # Set equal to rotation_matrix because the IMU body frame differs from the
+      # LiDAR frame by exactly that relabelling, and the quaternion needs the
+      # same one -- the upstream LIO-SAM default is likewise extrinsicRot ==
+      # extrinsicRPY.
+      #
+      # FRAGILE, unlike the two fields above: this one is reasoned, not
+      # measured. The driver already rotates the published attitude from the
+      # LPMS NWU world reference into ENU itself
+      # (sensors/imu/config/lpms_ig1.yaml: convert_nwu_to_enu), and LIORF then
+      # right-multiplies the quaternion by the INVERSE of this matrix
+      # (localization/liorf_localization/include/utility.h:
+      # extQRPY = Quaterniond(extRPY).inverse(), applied as q_final = q_from *
+      # extQRPY) -- so a yaw error here partially cancels the driver's own
+      # conversion. Bounded in practice by imuRPYWeight 0.01 in
+      # bringup/vehicle_bringup/config/liorf_localization.yaml, and yaw in
+      # LIORF is set by the initial pose anyway, so the exposure is roll/pitch.
+      # If the first localization run comes up rotated or rolls over, suspect
+      # this field before anything else; a bad value here shows as the map
+      # landing at an angle to odom, not as a silent drift.
+      orientation_matrix: [0.0, 1.0, 0.0,
+                          -1.0, 0.0, 0.0,
+                          0.0, 0.0, 1.0]

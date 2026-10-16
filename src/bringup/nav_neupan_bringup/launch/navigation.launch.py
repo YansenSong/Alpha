@@ -88,15 +88,23 @@ def _load_lidar_mounting(vehicle_config):
             raise RuntimeError(f'vehicle.planning.footprint.{field} must be > 0.02 m')
         body[field] = float(value)
 
-    # static_transform_publisher takes radians.
-    tf = (
-        f"{numbers['x']}",
-        f"{numbers['y']}",
-        f"{numbers['height_above_ground'] - float(base_height)}",
-        f"{math.radians(numbers['roll_deg'])}",
-        f"{math.radians(numbers['pitch_deg'])}",
-        f"{math.radians(numbers['yaw_deg'])}",
-    )
+    # static_transform_publisher takes radians, and the --flag form is used
+    # deliberately: the legacy positional form is
+    #   x y z YAW pitch ROLL frame_id child_frame_id
+    # i.e. the opposite order to the roll/pitch/yaw that vehicle.yaml is written
+    # in. This built (x, y, z, roll, pitch, yaw) positionally, which was
+    # harmless only because every mounting rotation was 0.0. With a non-zero
+    # mounting yaw it publishes the yaw as a roll. Flags remove the ambiguity.
+    tf = [
+        '--x', f"{numbers['x']}",
+        '--y', f"{numbers['y']}",
+        '--z', f"{numbers['height_above_ground'] - float(base_height)}",
+        '--roll', f"{math.radians(numbers['roll_deg'])}",
+        '--pitch', f"{math.radians(numbers['pitch_deg'])}",
+        '--yaw', f"{math.radians(numbers['yaw_deg'])}",
+        '--frame-id', base_frame,
+        '--child-frame-id', lidar_frame,
+    ]
     return {
         'min_height': min_height,
         'body': body,
@@ -171,9 +179,7 @@ def _scan_node(context):
             executable='static_transform_publisher',
             name='laser_link_static_tf',
             output='screen',
-            arguments=[
-                *layout['tf'], layout['base_frame'], layout['lidar_frame'],
-            ],
+            arguments=[*layout['tf']],
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
         ),
     ]

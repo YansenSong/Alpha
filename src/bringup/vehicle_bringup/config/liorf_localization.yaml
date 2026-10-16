@@ -1,10 +1,33 @@
 /**:
   ros__parameters:
     history_policy: "history_keep_last"
-    reliability_policy: "reliability_reliable"
+
+    # Passed to EVERY LIORF subscription (utility.h: QosPolicy(history_policy,
+    # reliability_policy) is used for the cloud, the IMU and the incremental
+    # odometry), so this single value has to match the strictest publisher.
+    # It must be best_effort because of the IMU: the LPMS-IG1 node publishes
+    # /imu/data with qos_profile_sensor_data, i.e. BEST_EFFORT
+    # (sensors/imu/imu/lpms_ig1_node.py). A RELIABLE subscriber never matches a
+    # BEST_EFFORT publisher, so with "reliability_reliable" LIORF received no IMU
+    # at all: deskewInfo() returned false forever and localization produced no
+    # odometry, with a symptom that looks like a bad map rather than a QoS
+    # mismatch. Verified on the vehicle with `ros2 topic info -v /imu/data`
+    # (publisher Reliability: BEST_EFFORT).
+    #
+    # Reliability compatibility is asymmetric, so best_effort is safe for the
+    # other inputs too: the lidar driver publishes /lidar_points RELIABLE
+    # (depth 10) and a RELIABLE publisher does match a BEST_EFFORT subscriber.
+    # The cost is that the subscriber may drop messages under load instead of
+    # waiting for retransmission, which is what the sensor-QoS convention
+    # intends for a 10 Hz cloud and a 400 Hz IMU.
+    reliability_policy: "reliability_best_effort"
 
     # Inputs and public output
-    pointCloudTopic: "/points_lio"
+    # /lidar_points is the Hesai driver's real output
+    # (sensors/lidar/config/config.yaml: ros_send_point_cloud_topic). The old
+    # "/points_lio" came from the simulation branch and nothing on the real
+    # vehicle publishes it, so localization would have subscribed to nothing.
+    pointCloudTopic: "/lidar_points"
     imuTopic: "/imu/data"
     odomTopic: "/odom"
     gpsTopic: "/odometry/gpsz"

@@ -8,6 +8,7 @@
 #   status  仅启动 sta__ 状态接收（不发任何控制帧，用于台架联调）
 #   all     启动 LiDAR + RViz2 + STM32 运动接口（不自动启动 IMU）
 #   nav     启动 Smac Hybrid-A* + NeuPAN 完整导航栈
+#   mapping 启动 LIO-SAM 建图（LiDAR + IMU + LIO-SAM），不下发任何控制
 #==========================================
 
 set -eo pipefail
@@ -16,11 +17,12 @@ ROS2_DISTRO="${ROS2_DISTRO:-humble}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VEHICLE_CONFIG="${VEHICLE_CONFIG:-${PROJECT_DIR}/config/vehicle.yaml}"
 LIDAR_CONFIG="${LIDAR_CONFIG:-${PROJECT_DIR}/src/sensors/lidar/config/config.yaml}"
-IMU_INTERFACE="${IMU_INTERFACE:-can0}"
-IMU_NODE_ID="${IMU_NODE_ID:-5}"
-IMU_PARAMS_FILE="${IMU_PARAMS_FILE:-${PROJECT_DIR}/src/sensors/imu/config/lpms_ig1_calibration.yaml}"
+IMU_PORT="${IMU_PORT:-/dev/ttyUSB0}"
+IMU_SENSOR_ID="${IMU_SENSOR_ID:-1}"
+IMU_PARAMS_FILE="${IMU_PARAMS_FILE:-${PROJECT_DIR}/src/sensors/imu/config/lpms_ig1_rs232_calibration.yaml}"
 INTERFACE_CONFIG="${PROJECT_DIR}/src/control/motion_interface/config/bridge_params.yaml"
 STATUS_CONFIG="${PROJECT_DIR}/src/control/motion_interface/config/status_params.yaml"
+MAPPING_RVIZ="${MAPPING_RVIZ:-true}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,7 +35,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 usage() {
     cat <<EOF
-用法: $0 <lidar|imu|bridge|status|all|nav> [map]
+用法: $0 <lidar|imu|bridge|status|all|nav|mapping> [map]
 
   lidar   启动 Hesai LiDAR + RViz2
   imu     仅启动 LPMS-IG1 IMU
@@ -43,14 +45,17 @@ usage() {
   nav     启动 Smac Hybrid-A* + NeuPAN 完整导航栈
           map 可传地图目录、map.yaml 或 map.pgm
   nav 地图目录需包含 map.yaml、map.pgm、GlobalMap.pcd
+  mapping 启动 LIO-SAM 建图：LiDAR + IMU + LIO-SAM + LIO-SAM RViz
+          不启动运动接口，建图时推车/遥控移动即可
 
 环境变量:
   VEHICLE_CONFIG 项目级车辆参数，默认: config/vehicle.yaml
   LIDAR_CONFIG   Hesai 配置文件，默认: src/sensors/lidar/config/config.yaml
-  IMU_INTERFACE  LPMS SocketCAN 接口，默认: can0
-  IMU_NODE_ID    LPMS CANopen 节点 ID，默认: 5
+  IMU_PORT       LPMS RS232 串口，默认: /dev/ttyUSB0
+  IMU_SENSOR_ID  LPMS 传感器 ID，默认: 1
   IMU_PARAMS_FILE LPMS 软件标定文件，默认使用项目内标定结果
   ROS2_DISTRO    ROS 发行版，默认: humble
+  MAPPING_RVIZ   mapping 模式是否开 RViz，默认: true（置 false 可无头建图）
 
 示例:
   $0 lidar
@@ -59,9 +64,11 @@ usage() {
   $0 status
   $0 all
   $0 nav maps/my_map
+  $0 mapping
   VEHICLE_CONFIG=/path/to/vehicle.yaml $0 bridge
   LIDAR_CONFIG=/path/to/hesai.yaml $0 lidar
-  IMU_INTERFACE=can0 IMU_NODE_ID=5 $0 imu
+  IMU_PORT=/dev/ttyUSB0 IMU_SENSOR_ID=1 $0 imu
+  MAPPING_RVIZ=false $0 mapping
 EOF
 }
 
@@ -73,6 +80,7 @@ ENABLE_CONTROL=false
 ENABLE_STATUS=false
 ENABLE_NAVIGATION=false
 NAVIGATION_RVIZ=false
+ENABLE_MAPPING=false
 
 case "$MODE" in
     lidar)
@@ -98,6 +106,17 @@ case "$MODE" in
         ENABLE_CONTROL=true
         ENABLE_NAVIGATION=true
         NAVIGATION_RVIZ=true
+        # LIORF cannot localize without the IMU (it deskews the cloud with it and
+        # fuses it in the factor graph), so nav has to bring the IMU up too.
+        ENABLE_IMU=true
+        ;;
+    mapping)
+        # mapping.launch.py starts the LiDAR and the IMU itself; these two flags
+        # are only turned on so this script's config validation and logging
+        # apply to them the same way as in the other modes.
+        ENABLE_LIDAR=true
+        ENABLE_IMU=true
+        ENABLE_MAPPING=true
         ;;
     help|-h|--help)
         usage
@@ -126,7 +145,7 @@ fi
 source "$ROS_SETUP"
 source "$WORKSPACE_SETUP"
 
-if $ENABLE_CONTROL || $ENABLE_NAVIGATION; then
+if $ENABLE_CONTROL || $ENABLE_NAVIGATION || $ENABLE_MAPPING; then
     if [[ ! -f "$VEHICLE_CONFIG" ]]; then
         log_error "车辆参数文件不存在: ${VEHICLE_CONFIG}"
         exit 1
@@ -146,7 +165,12 @@ if $ENABLE_LIDAR; then
 fi
 
 if $ENABLE_IMU; then
-    log_info "IMU SocketCAN: ${IMU_INTERFACE}, node ID: ${IMU_NODE_ID}"
+    if [[ ! -f "$IMU_PARAMS_FILE" ]]; then
+        log_error "IMU 标定文件不存在: ${IMU_PARAMS_FILE}"
+        exit 1
+    fi
+    log_info "IMU RS232: ${IMU_PORT}, sensor ID: ${IMU_SENSOR_ID}"
+    log_info "IMU 标定文件: ${IMU_PARAMS_FILE}"
 fi
 
 if $ENABLE_CONTROL; then
@@ -213,7 +237,20 @@ log_info "=============================="
 log_info "  实车启动模式: ${MODE}"
 log_info "=============================="
 
-if [[ "$MODE" == "nav" ]]; then
+if [[ "$MODE" == "mapping" ]]; then
+    LAUNCH_CMD=(
+        ros2 launch vehicle_bringup mapping.launch.py
+        "vehicle_config:=${VEHICLE_CONFIG}"
+        "lidar_config:=${LIDAR_CONFIG}"
+        "enable_imu:=${ENABLE_IMU}"
+        "imu_port:=${IMU_PORT}"
+        "imu_sensor_id:=${IMU_SENSOR_ID}"
+        "imu_params_file:=${IMU_PARAMS_FILE}"
+        "points_topic:=/lidar_points"
+        "use_sim_time:=false"
+        "use_rviz:=${MAPPING_RVIZ}"
+    )
+elif [[ "$MODE" == "nav" ]]; then
     LAUNCH_CMD=(
         ros2 launch nav_neupan_bringup navigation.launch.py
         "project_dir:=${PROJECT_DIR}"
@@ -225,8 +262,8 @@ if [[ "$MODE" == "nav" ]]; then
         "start_hardware:=true"
         "lidar_config:=${LIDAR_CONFIG}"
         "enable_imu:=${ENABLE_IMU}"
-        "imu_interface:=${IMU_INTERFACE}"
-        "imu_node_id:=${IMU_NODE_ID}"
+        "imu_port:=${IMU_PORT}"
+        "imu_sensor_id:=${IMU_SENSOR_ID}"
         "imu_params_file:=${IMU_PARAMS_FILE}"
         "bridge_params_file:=${INTERFACE_CONFIG}"
         "status_params_file:=${STATUS_CONFIG}"
@@ -252,8 +289,8 @@ else
         "lidar_config:=${LIDAR_CONFIG}"
         "lidar_rviz:=${LIDAR_RVIZ}"
         "enable_imu:=${ENABLE_IMU}"
-        "imu_interface:=${IMU_INTERFACE}"
-        "imu_node_id:=${IMU_NODE_ID}"
+        "imu_port:=${IMU_PORT}"
+        "imu_sensor_id:=${IMU_SENSOR_ID}"
         "imu_params_file:=${IMU_PARAMS_FILE}"
         "enable_control:=${ENABLE_CONTROL}"
         "bridge_params_file:=${INTERFACE_CONFIG}"

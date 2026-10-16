@@ -2,14 +2,28 @@
   ros__parameters:
 
     # Topics
-    pointCloudTopic: "/points_lio"
+    # /lidar_points is what the Hesai driver actually publishes
+    # (sensors/lidar/config/config.yaml: ros_send_point_cloud_topic). The old
+    # "/points_lio" came from the simulation branch and nothing on the real
+    # vehicle publishes it, so LIO-SAM started with no input at all. The launch
+    # file overrides this from the points_topic argument.
+    pointCloudTopic: "/lidar_points"
     imuTopic: "/imu/data"
     odomTopic: "odometry/imu"
     gpsTopic: "odometry/gpsz"
 
-    # Frames
+    # Frames. lidarFrame and baselinkFrame are overridden at launch from
+    # vehicle.frames in config/vehicle.yaml; the values here are the same names
+    # so this file stays correct when read on its own.
+    #
+    # baselinkFrame is frames.base (rear_axle_link), NOT a separate "base_link".
+    # Nothing on the real vehicle defines where base_link would be, and leaving
+    # it as base_link made imuPreintegration's lidarFrame->baselinkFrame lookup
+    # throw every cycle, so the odom->base transform silently degenerated to the
+    # identity (base assumed at the LiDAR origin). See the same note in
+    # bringup/vehicle_bringup/config/liorf_localization.yaml.
     lidarFrame: "laser_link"
-    baselinkFrame: "base_link"
+    baselinkFrame: "rear_axle_link"
     odometryFrame: "odom"
     mapFrame: "map"
 
@@ -20,8 +34,15 @@
     poseCovThreshold: 25.0
 
     # Export settings
+    # Left false on purpose: savePCD only writes cloudGlobal.pcd at shutdown,
+    # while the downstream nav stack wants GlobalMap.pcd. Save the map through
+    # the service instead:
+    #   ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap \
+    #     "{resolution: 0.2, destination: /home/t/Alpha/maps}"
     savePCD: false
-    # Relative paths resolve from the directory where LIO-SAM is launched.
+    # Used only when save_map is called with an empty destination. An absolute
+    # destination is preferred, because this path resolves against the
+    # directory LIO-SAM was launched from.
     savePCDDirectory: "maps/"
 
     # Sensor Settings
@@ -29,7 +50,15 @@
     N_SCAN: 16
     Horizon_SCAN: 1800
     downsampleRate: 1
-    lidarMinRange: 1.0
+    # Overridden at launch by run.launch.py's lidar_min_range argument, because
+    # it is coupled to whether the caller removed the vehicle body from the
+    # cloud. This value matches the RAW cloud, where it has to sit above the
+    # furthest body return; measured 2026-10-16, every one of the ~5000 body
+    # points per frame is within 0.75 m of the LiDAR. The mapping launch feeds
+    # a self-filtered cloud and drops this to 0.3 m instead, which is what
+    # keeps real geometry inside 1 m -- narrow gates, walls the vehicle passes
+    # close to -- that a 1.0 m floor used to discard outright.
+    lidarMinRange: 0.9
     lidarMaxRange: 1000.0
 
     # IMU Settings
@@ -41,10 +70,11 @@
     imuGravity: 9.80511
     imuRPYWeight: 0.01
 
-    # REQUIRED runtime overrides from root config/vehicle.yaml:
-    #   extrinsicTrans
-    #   extrinsicRot
-    #   extrinsicRPY
+    # REQUIRED runtime overrides from the launch file:
+    #   lidarFrame      and baselinkFrame  (from config/vehicle.yaml frames)
+    #   extrinsicTrans  extrinsicRot  extrinsicRPY  (lidar_to_imu)
+    #   pointCloudTopic and lidarMinRange  (from the launch arguments, since
+    #                                      both follow the cloud preprocessing)
     # Physical LiDAR/IMU mounting calibration is intentionally not duplicated
     # in this package-local parameter file.
 

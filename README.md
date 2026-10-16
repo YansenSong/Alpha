@@ -106,12 +106,28 @@ Smac + NeuPAN 从根目录 `config/vehicle.yaml` 获取最小转弯半径、车�
 
 导航栈使用 LIORF 先验地图定位，并要求根配置中的 LiDAR/IMU 外参为 `VERIFIED`。
 
-LIO-SAM 建图：
+LIO-SAM 建图（LiDAR + IMU + LIO-SAM 一次拉起，不启动运动接口，推车走一圈即可）：
 
 ```bash
-ros2 launch lio_sam run.launch.py \
-  vehicle_config:=$(pwd)/config/vehicle.yaml \
-  use_sim_time:=false
+bash scripts/start_vehicle.sh mapping
+```
+
+坐标系、LiDAR/IMU 外参和雷达安装位姿都由启动文件从 `config/vehicle.yaml` 注入，不写在各包的参数文件里。
+
+存图与转图：
+
+```bash
+ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap \
+  "{resolution: 0.2, destination: $(pwd)/maps}"
+# 产出 maps/<时间戳>/GlobalMap.pcd，再用该时间戳目录转 2D 图
+bash scripts/pcd_to_map.sh maps/<时间戳>
+```
+
+`pcd2gridmap` 是普通 CMake 工程，首次使用前需要编译：
+
+```bash
+cmake -S third_party/pcd2pgm -B third_party/pcd2pgm/build
+cmake --build third_party/pcd2pgm/build
 ```
 
 ## 8. 地图

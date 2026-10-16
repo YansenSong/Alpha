@@ -13,4 +13,11 @@ ament_target_dependencies(self_filter_node geometry_msgs rclcpp sensor_msgs tf2 
 target_compile_features(self_filter_node PUBLIC cxx_std_17)
 
 install(TARGETS self_filter_node DESTINATION lib/${PROJECT_NAME})
+
+# self_filter.rviz shows the raw and filtered clouds side by side, in
+# rear_axle_link, which is the frame the rejection box is defined in -- so the
+# box can be judged against the half-metre grid. Mapping and navigation both
+# consume this node, and both need this view when tuning the box.
+install(DIRECTORY rviz DESTINATION share/${PROJECT_NAME})
+
 ament_package()
