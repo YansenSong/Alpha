@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>area_rules</name>
+  <version>0.1.0</version>
+  <description>Persistent map rules and robot-side navigation constraints.</description>
+  <maintainer email="young@example.com">young</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

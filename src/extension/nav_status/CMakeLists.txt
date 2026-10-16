@@ -33,7 +33,6 @@ ament_target_dependencies(nav_status_node
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(nav_status_node "${cpp_typesupport_target}")
 add_dependencies(nav_status_node ${PROJECT_NAME}__rosidl_generator_cpp)
-
 install(TARGETS nav_status_node
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -2,14 +2,15 @@ nav_status_node:
   ros__parameters:
     goal_topic: "/goal_pose"
     plan_topic: "/plan_path"
-    remaining_distance_topic: "/global_path_remaining_distance"
     odom_topic: "/odom_wheel"
     status_topic: "/navigation/state"
+    planning_status_topic: "/global_plan/status"
+    arrival_topic: "/neupan/arrived"
 
-    arrival_distance_threshold: 0.20
     stopped_speed_threshold: 0.05
     arrival_hold_time: 0.80
-    input_timeout: 1.0
+    input_timeout: 2.0
+    planning_timeout: 10.0
 
     evaluation_rate: 20.0
     status_heartbeat_rate: 1.0

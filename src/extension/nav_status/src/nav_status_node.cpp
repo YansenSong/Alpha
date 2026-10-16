@@ -11,7 +11,8 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
 
 #include "nav_status/msg/navigation_status.hpp"
 
@@ -37,25 +38,20 @@ public:
   {
     goal_topic_ = declare_parameter<std::string>("goal_topic", "/goal_pose");
     plan_topic_ = declare_parameter<std::string>("plan_topic", "/plan_path");
-    remaining_distance_topic_ = declare_parameter<std::string>(
-      "remaining_distance_topic", "/global_path_remaining_distance");
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/odom_wheel");
     status_topic_ = declare_parameter<std::string>("status_topic", "/navigation/state");
+    planning_status_topic_ = declare_parameter<std::string>(
+      "planning_status_topic", "/global_plan/status");
+    arrival_topic_ = declare_parameter<std::string>("arrival_topic", "/neupan/arrived");
 
-    arrival_distance_threshold_ = declare_parameter<double>(
-      "arrival_distance_threshold", 0.20);
     stopped_speed_threshold_ = declare_parameter<double>(
       "stopped_speed_threshold", 0.05);
     arrival_hold_time_ = declare_parameter<double>("arrival_hold_time", 0.80);
-    input_timeout_ = declare_parameter<double>("input_timeout", 1.0);
+    input_timeout_ = declare_parameter<double>("input_timeout", 2.0);
+    planning_timeout_ = declare_parameter<double>("planning_timeout", 10.0);
     evaluation_rate_ = declare_parameter<double>("evaluation_rate", 20.0);
     status_heartbeat_rate_ = declare_parameter<double>("status_heartbeat_rate", 1.0);
 
-    if (arrival_distance_threshold_ < 0.0) {
-      RCLCPP_WARN(this->get_logger(),
-        "arrival_distance_threshold must be non-negative; using 0.20 m");
-      arrival_distance_threshold_ = 0.20;
-    }
     if (stopped_speed_threshold_ < 0.0) {
       RCLCPP_WARN(this->get_logger(),
         "stopped_speed_threshold must be non-negative; using 0.05 m/s");
@@ -68,8 +64,13 @@ public:
     }
     if (input_timeout_ <= 0.0) {
       RCLCPP_WARN(this->get_logger(),
-        "input_timeout must be positive; using 1.0 s");
-      input_timeout_ = 1.0;
+        "input_timeout must be positive; using 2.0 s");
+      input_timeout_ = 2.0;
+    }
+    if (planning_timeout_ <= 0.0) {
+      RCLCPP_WARN(this->get_logger(),
+        "planning_timeout must be positive; using 10.0 s");
+      planning_timeout_ = 10.0;
     }
     if (evaluation_rate_ <= 0.0) {
       RCLCPP_WARN(this->get_logger(),
@@ -94,12 +95,15 @@ public:
     plan_sub_ = create_subscription<nav_msgs::msg::Path>(
       plan_topic_, input_qos,
       std::bind(&NavStatusNode::onPlan, this, std::placeholders::_1));
-    remaining_distance_sub_ = create_subscription<std_msgs::msg::Float64>(
-      remaining_distance_topic_, input_qos,
-      std::bind(&NavStatusNode::onRemainingDistance, this, std::placeholders::_1));
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic_, input_qos,
       std::bind(&NavStatusNode::onOdom, this, std::placeholders::_1));
+    planning_status_sub_ = create_subscription<std_msgs::msg::String>(
+      planning_status_topic_, input_qos,
+      std::bind(&NavStatusNode::onPlanningStatus, this, std::placeholders::_1));
+    arrival_sub_ = create_subscription<std_msgs::msg::Bool>(
+      arrival_topic_, input_qos,
+      std::bind(&NavStatusNode::onArrival, this, std::placeholders::_1));
 
     evaluation_timer_ = create_wall_timer(
       periodFromRate(evaluation_rate_),
@@ -142,34 +146,49 @@ private:
   {
     arrival_candidate_since_.reset();
 
-    // Do not reuse telemetry from the previous navigation task.  Odom and
-    // remaining-distance callbacks will repopulate these values immediately.
-    remaining_distance_.reset();
-    remaining_distance_stamp_.reset();
+    // Do not reuse telemetry from the previous navigation task.
     actual_speed_.reset();
     odom_stamp_.reset();
+    neupan_arrived_ = false;
+    arrival_stamp_.reset();
+    state_entered_at_ = now();
+    rule_replan_pending_ = false;
 
     transitionTo(State::PLANNING, "new goal received; waiting for global plan");
   }
 
-  void onPlan(const nav_msgs::msg::Path::SharedPtr msg)
+  void onPlanningStatus(const std_msgs::msg::String::SharedPtr msg)
   {
-    if (state_ != State::PLANNING || msg->poses.empty()) {
+    if (msg->data == "rule_replan_pending") {
+      rule_replan_pending_ = true;
+      transitionTo(State::PLANNING, "rule_replan_pending; vehicle held");
       return;
     }
-
-    arrival_candidate_since_.reset();
-    transitionTo(State::MOVING, "global plan available; navigation active");
+    if (msg->data == "planning") {
+      return;
+    }
+    if (msg->data == "succeeded") {
+      rule_replan_pending_ = false;
+      if (state_ == State::PLANNING) {
+        state_entered_at_ = now();
+        transitionTo(State::MOVING, "global plan available; navigation active");
+      }
+      return;
+    }
+    if (msg->data.rfind("failed:", 0) == 0 && state_ == State::PLANNING) {
+      transitionTo(State::FAILED, msg->data);
+    }
   }
 
-  void onRemainingDistance(const std_msgs::msg::Float64::SharedPtr msg)
+  void onArrival(const std_msgs::msg::Bool::SharedPtr msg)
   {
-    if (!std::isfinite(msg->data)) {
-      return;
-    }
+    neupan_arrived_ = msg->data;
+    arrival_stamp_ = now();
+  }
 
-    remaining_distance_ = msg->data;
-    remaining_distance_stamp_ = now();
+  void onPlan(const nav_msgs::msg::Path::SharedPtr msg)
+  {
+    (void)msg;  // Execution begins only after the controller installs the validated path.
   }
 
   void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -197,22 +216,39 @@ private:
 
   void evaluateArrival()
   {
+    const auto current = now();
+    if (state_ == State::PLANNING) {
+      if (!rule_replan_pending_ && state_entered_at_ &&
+        (current - *state_entered_at_).seconds() > planning_timeout_)
+      {
+        transitionTo(State::FAILED, "failed: global planning timed out");
+      }
+      return;
+    }
+
     if (state_ != State::MOVING) {
       arrival_candidate_since_.reset();
       return;
     }
 
-    const auto current = now();
-    if (!remaining_distance_ || !actual_speed_ ||
-      !isFresh(remaining_distance_stamp_, current) || !isFresh(odom_stamp_, current))
+    const bool odom_fresh = actual_speed_ && isFresh(odom_stamp_, current);
+    const bool arrival_fresh = arrival_stamp_ && isFresh(arrival_stamp_, current);
+    if (!odom_fresh || !arrival_fresh)
     {
       arrival_candidate_since_.reset();
+      if (state_entered_at_ &&
+        (current - *state_entered_at_).seconds() > input_timeout_)
+      {
+        transitionTo(
+          State::FAILED,
+          !odom_fresh ? "failed: odometry input timed out" :
+          "failed: NeuPAN arrival input timed out");
+      }
       return;
     }
 
-    const bool close_enough = *remaining_distance_ <= arrival_distance_threshold_;
     const bool stopped = *actual_speed_ <= stopped_speed_threshold_;
-    if (!close_enough || !stopped) {
+    if (!neupan_arrived_ || !stopped) {
       arrival_candidate_since_.reset();
       return;
     }
@@ -258,30 +294,34 @@ private:
   State state_;
   std::string detail_;
 
-  std::optional<double> remaining_distance_;
   std::optional<double> actual_speed_;
-  std::optional<rclcpp::Time> remaining_distance_stamp_;
   std::optional<rclcpp::Time> odom_stamp_;
   std::optional<rclcpp::Time> arrival_candidate_since_;
+  std::optional<rclcpp::Time> arrival_stamp_;
+  std::optional<rclcpp::Time> state_entered_at_;
+  bool neupan_arrived_{false};
+  bool rule_replan_pending_{false};
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr plan_sub_;
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr remaining_distance_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planning_status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr arrival_sub_;
   rclcpp::Publisher<NavigationStatus>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr evaluation_timer_;
   rclcpp::TimerBase::SharedPtr heartbeat_timer_;
 
   std::string goal_topic_;
   std::string plan_topic_;
-  std::string remaining_distance_topic_;
   std::string odom_topic_;
   std::string status_topic_;
+  std::string planning_status_topic_;
+  std::string arrival_topic_;
 
-  double arrival_distance_threshold_ = 0.20;
   double stopped_speed_threshold_ = 0.05;
   double arrival_hold_time_ = 0.80;
-  double input_timeout_ = 1.0;
+  double input_timeout_ = 2.0;
+  double planning_timeout_ = 10.0;
   double evaluation_rate_ = 20.0;
   double status_heartbeat_rate_ = 1.0;
 };

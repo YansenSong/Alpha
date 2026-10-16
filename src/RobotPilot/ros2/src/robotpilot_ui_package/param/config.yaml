@@ -1,0 +1,14 @@
+ui/flask_app:
+  ros__parameters:
+    appAddress: "127.0.0.1"
+    portApp: 5050
+
+rosbridge_websocket:
+  ros__parameters:
+    address: "127.0.0.1"
+    port: 9090
+
+web_video_server:
+  ros__parameters:
+    address: "127.0.0.1"
+    port: 8080
