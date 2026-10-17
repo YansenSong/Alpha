@@ -9,7 +9,8 @@
     "test": "node --test test/*.test.mjs",
     "verify:gateway": "node src/verify-gateway.mjs",
     "verify:web": "node src/verify-web-proxy.mjs",
-    "verify:ui": "node src/verify-ui.mjs"
+    "verify:ui": "node src/verify-ui.mjs",
+    "verify:robot": "node src/verify-robot-mcp.mjs"
   },
   "engines": {
     "node": ">=22.19.0"

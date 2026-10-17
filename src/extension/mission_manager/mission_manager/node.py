@@ -13,7 +13,7 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from nav_status.msg import NavigationStatus
+from nav_status.msg import NavigationExecution as NavigationStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
@@ -144,17 +144,16 @@ class MissionManager(Node):
         self.store = MissionStore(self.get_parameter("database_path").value, self.robot_id)
         self.run = self.store.latest_run()
         self.active_request_id = None
+        self.navigation_execution_id = None
         self.pose = None
         self.pose_received_at = None
         self.ekf_odom_received_at = None
         self.deadline = None
         self.step_started = None
         self.nav_seen_active = False
+        self.navigation_result = None
         self.rule_replan_pending_at = None
         self.goal_sent_ns = None
-        self.nav_arrived = False
-        self.nav_arrived_at = None
-        self.stopped_since = None
         self.linear_speed = None
         self.linear_speed_received_at = None
         self.action_status = None
@@ -209,7 +208,7 @@ class MissionManager(Node):
         self.create_subscription(DiagnosticArray, "/diagnostics", self.on_diagnostics, 10)
         self.create_subscription(String, "/battery/state", self.on_battery_state, 10)
         self.create_subscription(String, "/area_rules/control", self.on_area_control, 10)
-        self.create_subscription(NavigationStatus, "/navigation/state", self.on_nav, 10)
+        self.create_subscription(NavigationStatus, "/navigation/execution_state", self.on_nav, 10)
         self.create_subscription(PoseStamped, "/goal_pose", self.on_goal, 10)
         self.create_subscription(String, "/dock_trigger_status", self.on_dock, 10)
         self.create_subscription(Odometry, "/liorf_localization/mapping/odometry", self.on_odom, 10)
@@ -781,9 +780,6 @@ class MissionManager(Node):
         self.step_started = time.monotonic()
         self.nav_seen_active = False
         self.goal_sent_ns = None
-        self.nav_arrived = False
-        self.nav_arrived_at = None
-        self.stopped_since = None
         self._event(f"step {self.run['step_index'] + 1} started: {kind}")
         if kind == "wait":
             seconds = self.run["remaining_seconds"] if resume else step["seconds"]
@@ -796,6 +792,8 @@ class MissionManager(Node):
             goal.header.frame_id = "map"
             goal.header.stamp = self.get_clock().now().to_msg()
             self.goal_sent_ns = goal.header.stamp.sec * 1000000000 + goal.header.stamp.nanosec
+            self.navigation_execution_id = f"{goal.header.stamp.sec}:{goal.header.stamp.nanosec}"
+            self.navigation_result = None
             goal.pose.position.x = pose["x"]
             goal.pose.position.y = pose["y"]
             goal.pose.orientation.z = pose["z"]
@@ -853,6 +851,16 @@ class MissionManager(Node):
         self.publish_state()
 
     def _complete_step(self):
+        if self._kind() in ("waypoint", "home"):
+            if not self.navigation_result:
+                return
+            # Persist the authority's observations; never rejudge navigation.
+            self.store.record_navigation_evidence({
+                **self.navigation_result,
+                "task_id": self.run["task_id"], "step_index": self.run["step_index"],
+                "attempt": self.run["attempt"], "map_id": self.run.get("map_id"),
+                "map_version_id": self.run.get("map_version_id"), "recorded_at": utc_now(),
+            })
         self._event(f"step {self.run['step_index'] + 1} completed")
         self.deadline = None
         arrival_index = (self.run["step_index"] if self._kind() == "waypoint"
@@ -891,20 +899,8 @@ class MissionManager(Node):
             self.deadline += max(0.0, now - self.rule_replan_pending_at)
             self.rule_replan_pending_at = now
             return
-        if self._kind() in ("waypoint", "home") and self.nav_arrived:
-            now = time.monotonic()
-            if self.nav_arrived_at is not None and now - self.nav_arrived_at > 5.0:
-                self._fail("robot did not reach stable stop after ARRIVED")
-                return
-            odometry_fresh = self.linear_speed_received_at is not None and now - self.linear_speed_received_at <= 1.0
-            pose_fresh = self.pose_received_at is not None and now - self.pose_received_at <= 1.0
-            if odometry_fresh and pose_fresh and self.linear_speed is not None and self.linear_speed <= 0.05:
-                self.stopped_since = self.stopped_since or now
-                if now - self.stopped_since >= 0.5:
-                    self._complete_step()
-                    return
-            else:
-                self.stopped_since = None
+        if self._kind() in ("waypoint", "home") and self.navigation_result:
+            self._complete_step()
             return
         if self._kind() == "wait" and time.monotonic() - self.last_wait_persist >= 1.0:
             self.run = self.store.update_run(
@@ -932,21 +928,35 @@ class MissionManager(Node):
     def on_nav(self, message):
         if not self.run or self.run["status"] != "RUNNING" or self.deadline is None or self._kind() not in ("waypoint", "home"):
             return
-        stamp_ns = message.stamp.sec * 1000000000 + message.stamp.nanosec
-        if self.goal_sent_ns is None or stamp_ns < self.goal_sent_ns:
+        stamp_ns = message.goal.header.stamp.sec * 1000000000 + message.goal.header.stamp.nanosec
+        goal = message.goal.pose
+        target = self._navigation_target()
+        if (stamp_ns != self.goal_sent_ns or message.execution_id != self.navigation_execution_id
+                or message.goal.header.frame_id != "map"
+                or {"x": goal.position.x, "y": goal.position.y,
+                    "z": goal.orientation.z, "w": goal.orientation.w} != target):
             return
-        if message.state == NavigationStatus.PLANNING and message.detail.startswith("new goal received"):
+        if message.state in (NavigationStatus.PLANNING, NavigationStatus.MOVING):
             self.nav_seen_active = True
-            self.rule_replan_pending_at = None
-        elif message.state == NavigationStatus.PLANNING and message.detail.startswith("rule_replan_pending"):
-            self.rule_replan_pending_at = self.rule_replan_pending_at or time.monotonic()
-        elif message.state == NavigationStatus.MOVING:
-            self.rule_replan_pending_at = None
+            if message.held:
+                self.rule_replan_pending_at = self.rule_replan_pending_at or time.monotonic()
+            else:
+                self.rule_replan_pending_at = None
         elif self.nav_seen_active and message.state == NavigationStatus.ARRIVED:
-            self.nav_arrived = True
-            self.nav_arrived_at = time.monotonic()
-            self.stopped_since = None
-        elif self.nav_seen_active and message.state == NavigationStatus.FAILED:
+            try:
+                result = json.loads(message.result_json)
+            except (ValueError, TypeError):
+                return
+            if (not isinstance(result, dict) or result.get("source") != "nav_status"
+                    or result.get("policy_version") != 1 or result.get("verified") is not True
+                    or result.get("execution_id") != self.navigation_execution_id
+                    or result.get("goal_stamp_ns") != self.goal_sent_ns
+                    or result.get("path_stamp_ns") != message.path_stamp.sec * 1000000000 + message.path_stamp.nanosec
+                    or result.get("target") != target):
+                return
+            self.navigation_result = result
+            self.rule_replan_pending_at = None
+        elif message.state == NavigationStatus.FAILED:
             self._fail(message.detail or "navigation failed")
 
     def on_dock(self, message):
@@ -957,6 +967,10 @@ class MissionManager(Node):
             self._complete_step()
         elif status == "failed":
             self._fail("dock controller reported failure")
+
+    def _navigation_target(self):
+        step = self.run["steps"][self.run["step_index"]]
+        return step["pose"] if step["type"] == "waypoint" else {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
 
     def on_odom(self, message):
         p = message.pose.pose

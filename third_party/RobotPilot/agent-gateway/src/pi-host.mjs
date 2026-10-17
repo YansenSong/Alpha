@@ -2,32 +2,43 @@ import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  createAgentSession, DefaultResourceLoader, ModelRuntime,
+  createAgentSession, createMcpExtension, DefaultResourceLoader, ModelRuntime,
   SessionManager, SettingsManager, getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
 export const projectRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 export const allowedTools = ["get_alpha_info"];
+export const robotTools = ["mcp__ros_inspect__get_nodes", "mcp__ros_inspect__get_node_details", "mcp__ros_inspect__get_topics", "mcp__ros_inspect__get_topic_type", "mcp__ros_inspect__get_services", "mcp__ros_inspect__get_actions", "mcp__ros_inspect__get_action_status", "mcp__ros_inspect__subscribe_once", "mcp__alpha__get_robot_status", "mcp__alpha__list_navigation_locations", "mcp__alpha__navigate_to_location", "mcp__alpha__get_task_status", "mcp__alpha__request_software_stop", "mcp__alpha__cancel_navigation"];
 
 // Deliberately separate global executable resources from model credentials.
 // Trust is scoped to this host invocation; never updates ~/.pi/agent/trust.json.
-export async function createProjectSession({ trustProject = false, live = false, sessionManager = SessionManager.inMemory() } = {}) {
+export async function createProjectSession({ trustProject = false, live = false, enableMcp = live && process.env.ALPHA_AGENT_MCP !== "0", sessionManager = SessionManager.inMemory() } = {}) {
   if (!trustProject) throw new Error("Project resource loading requires explicit trustProject: true");
   const agentDir = path.join(projectRoot, "third_party/RobotPilot/agent-gateway/.runtime/agent");
   await mkdir(agentDir, { recursive: true });
   const settingsManager = SettingsManager.create(projectRoot, agentDir);
+  const configFile = path.join(projectRoot, ".pi/mcp.json");
+  const mcpConfig = enableMcp ? JSON.parse(await readFile(configFile, "utf8")) : null;
+  if (mcpConfig && Object.keys(mcpConfig.mcpServers).some(name => !["alpha", "ros_inspect"].includes(name))) {
+    throw new Error("Only Alpha's project MCP servers are permitted");
+  }
+  const loadConfig = () => ({
+    servers: Object.entries(mcpConfig?.mcpServers ?? {}).map(([name, config]) => ({ name, config, source: configFile, scope: "project" })),
+    errors: [], autoEnableCodemode: false, projectConfig: configFile,
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd: projectRoot, agentDir, settingsManager,
+    extensionFactories: enableMcp ? [createMcpExtension({ loadConfig, logPath: path.join(agentDir, "mcp.log") })] : [],
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
   });
   await resourceLoader.reload({ resolveProjectTrust: async () => true });
   const loaded = resourceLoader.getExtensions();
   if (loaded.errors.length) throw new Error(`Project extension loading failed: ${JSON.stringify(loaded.errors)}`);
   const expectedExtension = path.join(projectRoot, ".pi/extensions/robotpilot-tools.ts");
-  if (loaded.extensions.length !== 1 || path.resolve(loaded.extensions[0].path) !== expectedExtension) {
+  if (loaded.extensions.length !== (enableMcp ? 2 : 1) || !loaded.extensions.some(extension => path.resolve(extension.path) === expectedExtension)) {
     throw new Error("Unexpected extension set: only robotpilot-tools.ts is permitted in this verification host");
   }
-  if (!resourceLoader.getAppendSystemPrompt().some(text => text.includes("MOCK ONLY"))) {
+  if (!resourceLoader.getAppendSystemPrompt().some(text => text.includes("ALPHA_AGENT_POLICY"))) {
     throw new Error("Project APPEND_SYSTEM.md was not loaded");
   }
   // No global executable extensions/settings are used. ModelRuntime alone reads
@@ -56,19 +67,35 @@ export async function createProjectSession({ trustProject = false, live = false,
   }
   const { session } = await createAgentSession({
     cwd: projectRoot, agentDir, settingsManager, resourceLoader, modelRuntime, model,
-    tools: allowedTools,
+    tools: enableMcp ? [...allowedTools, ...robotTools] : allowedTools,
     sessionManager,
     thinkingLevel: "off",
   });
   try {
     await session.bindExtensions({});
+    if (enableMcp) {
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline && !robotTools.every(name => session.getActiveToolNames().includes(name))) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
     const actual = session.getActiveToolNames().slice().sort();
-    if (JSON.stringify(actual) !== JSON.stringify(allowedTools)) {
+    const expected = (enableMcp ? [...allowedTools, ...robotTools] : [...allowedTools]).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
       throw new Error(`Unexpected active tools: ${actual.join(", ")}`);
     }
     return { session, resourceLoader };
   } catch (error) {
-    session.dispose();
+    await disposeProjectSession(session);
     throw error;
   }
+}
+
+export async function disposeProjectSession(session) {
+  if (!session) return;
+  await session.abort();
+  if (session.extensionRunner?.hasHandlers("session_shutdown")) {
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+  }
+  session.dispose();
 }

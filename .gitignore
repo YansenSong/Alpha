@@ -62,3 +62,9 @@ CATKIN_IGNORE
 /third_party/RobotPilot/agent-gateway/.runtime/
 /third_party/RobotPilot/agent-gateway/.env
 /third_party/RobotPilot/agent-gateway/.env.*
+
+# Alpha MCP isolated Python environment and local execution journal
+/third_party/RobotPilot/alpha-mcp/.venv/
+/third_party/RobotPilot/alpha-mcp/.runtime/
+/third_party/RobotPilot/alpha-mcp/*.egg-info/
+**/__pycache__/

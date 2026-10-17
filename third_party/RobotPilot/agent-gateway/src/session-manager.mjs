@@ -2,7 +2,7 @@ import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypt
 import { mkdir, readdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createProjectSession, projectRoot } from "./pi-host.mjs";
+import { createProjectSession, disposeProjectSession, projectRoot, robotTools } from "./pi-host.mjs";
 
 const textOf = message => typeof message.content === "string" ? message.content :
   (message.content ?? []).filter(c => c.type === "text").map(c => c.text).join("");
@@ -133,7 +133,7 @@ export class GatewaySessions {
       if (!item) return;
       item.status = event.isError ? "error" : "done";
       // Only the explicitly approved static tool's text is exposed to the browser.
-      item.text = event.toolName === "get_alpha_info" ? textOf(event.result).slice(0, 8000) : "Result withheld";
+      item.text = (event.toolName === "get_alpha_info" || robotTools.includes(event.toolName)) ? textOf(event.result).slice(0, 8000) : "Result withheld";
       this.emit(record, "agent.tool_end", { item });
     }
     // prompt() resolution also covers errors before agent_start and extension handling.
@@ -192,7 +192,7 @@ export class GatewaySessions {
     } catch (error) { record.deleting = false; throw error; }
     this.records.delete(id);
     record.unsubscribe?.();
-    record.session?.dispose();
+    await disposeProjectSession(record.session);
     const event = JSON.stringify({ type: "session.deleted", session_id: id });
     for (const client of record.clients) if (client.readyState === 1) client.send(event);
     record.clients.clear();
@@ -204,7 +204,7 @@ export class GatewaySessions {
     await Promise.all([...this.records.values()].map(async record => {
       await this.abort(record);
       record.unsubscribe?.();
-      record.session?.dispose();
+      await disposeProjectSession(record.session);
       await record.writes;
     }));
   }

@@ -244,7 +244,7 @@ class MissionStoreTest(unittest.TestCase):
             connection.close()
 
             store = MissionStore(path)
-            self.assertEqual(store.schema_version, 5)
+            self.assertEqual(store.schema_version, 6)
             self.assertEqual(store.run("task")["arrival_step_index"], -1)
             self.assertIsNone(store.mission("legacy")["map_id"])
             self.assertIsNone(store.run("task")["map_version_id"])
@@ -256,11 +256,11 @@ class MissionStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "future.sqlite3")
             with sqlite3.connect(path) as db:
-                db.execute("PRAGMA user_version = 6")
+                db.execute("PRAGMA user_version = 7")
             with self.assertRaisesRegex(RuntimeError, "schema is newer"):
                 MissionStore(path)
             with sqlite3.connect(path) as db:
-                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
+                self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
 
     def test_schema_migration_rolls_back_after_ddl_error(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -325,7 +325,7 @@ class MissionStoreTest(unittest.TestCase):
                     PRAGMA user_version = 1;
                 """)
             store = MissionStore(path)
-            self.assertEqual(store.schema_version, 5)
+            self.assertEqual(store.schema_version, 6)
             self.assertEqual(store.run("task-1")["arrival_step_index"], -1)
             self.assertEqual(store.run("task-1")["status"], "PAUSED")
             self.assertIsNone(store.run("task-1")["origin_request_id"])

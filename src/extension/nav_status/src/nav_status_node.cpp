@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -15,6 +16,9 @@
 #include "std_msgs/msg/string.hpp"
 
 #include "nav_status/msg/navigation_status.hpp"
+#include "nav_status/msg/navigation_execution.hpp"
+#include "nav_status/msg/controller_feedback.hpp"
+#include <nlohmann/json.hpp>
 
 namespace nav_status
 {
@@ -37,12 +41,8 @@ public:
   : Node("nav_status_node", options), state_(State::WAITING_FOR_GOAL)
   {
     goal_topic_ = declare_parameter<std::string>("goal_topic", "/goal_pose");
-    plan_topic_ = declare_parameter<std::string>("plan_topic", "/plan_path");
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/odom_wheel");
     status_topic_ = declare_parameter<std::string>("status_topic", "/navigation/state");
-    planning_status_topic_ = declare_parameter<std::string>(
-      "planning_status_topic", "/global_plan/status");
-    arrival_topic_ = declare_parameter<std::string>("arrival_topic", "/neupan/arrived");
 
     stopped_speed_threshold_ = declare_parameter<double>(
       "stopped_speed_threshold", 0.05);
@@ -92,18 +92,17 @@ public:
     goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       goal_topic_, input_qos,
       std::bind(&NavStatusNode::onGoal, this, std::placeholders::_1));
-    plan_sub_ = create_subscription<nav_msgs::msg::Path>(
-      plan_topic_, input_qos,
-      std::bind(&NavStatusNode::onPlan, this, std::placeholders::_1));
+    execution_pub_ = create_publisher<nav_status::msg::NavigationExecution>(
+      "/navigation/execution_state", status_qos);
+    planner_sub_ = create_subscription<nav_status::msg::NavigationExecution>(
+      "/navigation/planner_state", status_qos,
+      std::bind(&NavStatusNode::onPlanner, this, std::placeholders::_1));
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic_, input_qos,
       std::bind(&NavStatusNode::onOdom, this, std::placeholders::_1));
-    planning_status_sub_ = create_subscription<std_msgs::msg::String>(
-      planning_status_topic_, input_qos,
-      std::bind(&NavStatusNode::onPlanningStatus, this, std::placeholders::_1));
-    arrival_sub_ = create_subscription<std_msgs::msg::Bool>(
-      arrival_topic_, input_qos,
-      std::bind(&NavStatusNode::onArrival, this, std::placeholders::_1));
+    feedback_sub_ = create_subscription<nav_status::msg::ControllerFeedback>(
+      "/neupan/controller_feedback", input_qos,
+      std::bind(&NavStatusNode::onFeedback, this, std::placeholders::_1));
 
     evaluation_timer_ = create_wall_timer(
       periodFromRate(evaluation_rate_),
@@ -142,8 +141,23 @@ private:
     return "UNKNOWN";
   }
 
-  void onGoal(const geometry_msgs::msg::PoseStamped::SharedPtr /*msg*/)
+  static bool sameGoal(const geometry_msgs::msg::PoseStamped & a,
+                       const geometry_msgs::msg::PoseStamped & b)
   {
+    return a.header.stamp == b.header.stamp && a.header.frame_id == b.header.frame_id &&
+      a.pose == b.pose;
+  }
+
+  void onGoal(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
+    if (have_goal_ && sameGoal(goal_, *msg)) {return;}
+    goal_ = *msg;
+    have_goal_ = true;
+    execution_id_ = std::to_string(goal_.header.stamp.sec) + ":" +
+      std::to_string(goal_.header.stamp.nanosec);
+    path_stamp_ = builtin_interfaces::msg::Time();
+    result_json_.clear();
+    planner_stamp_.reset();
     arrival_candidate_since_.reset();
 
     // Do not reuse telemetry from the previous navigation task.
@@ -155,40 +169,62 @@ private:
     rule_replan_pending_ = false;
 
     transitionTo(State::PLANNING, "new goal received; waiting for global plan");
+    const auto key = rclcpp::Time(goal_.header.stamp).nanoseconds();
+    const auto pending = pending_planners_.find(key);
+    if (pending != pending_planners_.end()) {
+      auto event = std::make_shared<nav_status::msg::NavigationExecution>(pending->second);
+      pending_planners_.erase(pending);
+      onPlanner(event);
+    }
   }
 
-  void onPlanningStatus(const std_msgs::msg::String::SharedPtr msg)
+  void onPlanner(const nav_status::msg::NavigationExecution::SharedPtr msg)
   {
-    if (msg->data == "rule_replan_pending") {
-      rule_replan_pending_ = true;
-      transitionTo(State::PLANNING, "rule_replan_pending; vehicle held");
+    // Goal stamps are identities, not an ordering clock: Web and ROS clients
+    // may use different time domains. Only /goal_pose starts an execution.
+    // Buffer a bounded number of planner events for cross-publisher ordering.
+    if (!have_goal_ || !sameGoal(goal_, msg->goal)) {
+      pending_planners_[rclcpp::Time(msg->goal.header.stamp).nanoseconds()] = *msg;
+      if (pending_planners_.size() > 8) {pending_planners_.erase(pending_planners_.begin());}
       return;
     }
-    if (msg->data == "planning") {
-      return;
-    }
-    if (msg->data == "succeeded") {
-      rule_replan_pending_ = false;
-      if (state_ == State::PLANNING) {
-        state_entered_at_ = now();
-        transitionTo(State::MOVING, "global plan available; navigation active");
+    if (state_ == State::ARRIVED || state_ == State::FAILED) {return;}
+    if (planner_stamp_ && rclcpp::Time(msg->stamp) < *planner_stamp_) {return;}
+    planner_stamp_ = rclcpp::Time(msg->stamp);
+    rule_replan_pending_ = msg->held;
+    if (msg->state == msg->FAILED) {
+      transitionTo(State::FAILED, msg->detail);
+    } else if (msg->state == msg->MOVING) {
+      if (msg->path_stamp.sec == 0 && msg->path_stamp.nanosec == 0) {return;}
+      if (path_stamp_ != msg->path_stamp) {
+        neupan_arrived_ = false;
+        arrival_stamp_.reset();
+        arrival_candidate_since_.reset();
       }
-      return;
-    }
-    if (msg->data.rfind("failed:", 0) == 0 && state_ == State::PLANNING) {
-      transitionTo(State::FAILED, msg->data);
+      path_stamp_ = msg->path_stamp;
+      state_entered_at_ = now();
+      transitionTo(State::MOVING, "controller installed current execution path");
+    } else {
+      arrival_candidate_since_.reset();
+      transitionTo(State::PLANNING, msg->detail);
     }
   }
 
-  void onArrival(const std_msgs::msg::Bool::SharedPtr msg)
+  void onFeedback(const nav_status::msg::ControllerFeedback::SharedPtr msg)
   {
-    neupan_arrived_ = msg->data;
-    arrival_stamp_ = now();
-  }
-
-  void onPlan(const nav_msgs::msg::Path::SharedPtr msg)
-  {
-    (void)msg;  // Execution begins only after the controller installs the validated path.
+    if (state_ != State::MOVING || msg->path_stamp != path_stamp_) {return;}
+    const double age = (now() - rclcpp::Time(msg->stamp)).seconds();
+    const double pose_age = (now() - rclcpp::Time(msg->observed_pose.header.stamp)).seconds();
+    const auto & p = msg->observed_pose.pose;
+    if (pose_age < 0.0 || pose_age > input_timeout_ ||
+        msg->observed_pose.header.frame_id.empty() ||
+        !std::isfinite(p.position.x) || !std::isfinite(p.position.y)) {return;}
+    if (age < 0.0 || age > input_timeout_ || !std::isfinite(msg->position_tolerance) ||
+        msg->position_tolerance <= 0.0) {return;}
+    if (arrival_stamp_ && rclcpp::Time(msg->stamp) < *arrival_stamp_) {return;}
+    neupan_arrived_ = msg->arrived;
+    arrival_stamp_ = rclcpp::Time(msg->stamp);
+    feedback_ = *msg;
   }
 
   void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -200,8 +236,11 @@ private:
       return;
     }
 
+    const double age = (now() - rclcpp::Time(msg->header.stamp)).seconds();
+    if (age < 0.0 || age > input_timeout_) {return;}
+    if (odom_stamp_ && rclcpp::Time(msg->header.stamp) < *odom_stamp_) {return;}
     actual_speed_ = speed;
-    odom_stamp_ = now();
+    odom_stamp_ = rclcpp::Time(msg->header.stamp);
   }
 
   bool isFresh(const std::optional<rclcpp::Time> & stamp, const rclcpp::Time & current) const
@@ -259,7 +298,29 @@ private:
     }
 
     if ((current - *arrival_candidate_since_).seconds() >= arrival_hold_time_) {
-      transitionTo(State::ARRIVED, "goal reached and vehicle stopped");
+      using nlohmann::json;
+      const auto & p = feedback_.observed_pose.pose;
+      const auto & target = goal_.pose;
+      result_json_ = json({
+        {"source", "nav_status"}, {"policy_version", 1}, {"verified", true},
+        {"execution_id", execution_id_},
+        {"goal_stamp_ns", rclcpp::Time(goal_.header.stamp).nanoseconds()},
+        {"path_stamp_ns", rclcpp::Time(path_stamp_).nanoseconds()},
+        {"target", {{"x", target.position.x}, {"y", target.position.y},
+                    {"z", target.orientation.z}, {"w", target.orientation.w}}},
+        {"observed_pose", {{"x", p.position.x}, {"y", p.position.y},
+                           {"z", p.orientation.z}, {"w", p.orientation.w}}},
+        {"pose_frame", feedback_.observed_pose.header.frame_id},
+        {"position_tolerance", feedback_.position_tolerance},
+        {"linear_speed", *actual_speed_}, {"stopped_speed_threshold", stopped_speed_threshold_},
+        {"stable_stop_seconds", (current - *arrival_candidate_since_).seconds()},
+        {"arrival_hold_time", arrival_hold_time_},
+        {"observed_stamp_ns", rclcpp::Time(feedback_.stamp).nanoseconds()},
+        {"pose_stamp_ns", rclcpp::Time(feedback_.observed_pose.header.stamp).nanoseconds()},
+        {"odometry_topic", odom_topic_},
+        {"odometry_stamp_ns", rclcpp::Time(*odom_stamp_).nanoseconds()}
+      }).dump();
+      transitionTo(State::ARRIVED, "controller reached endpoint and vehicle stopped");
       arrival_candidate_since_.reset();
     }
   }
@@ -289,11 +350,31 @@ private:
     status.state = static_cast<std::uint8_t>(state_);
     status.detail = detail_;
     status_pub_->publish(status);
+    nav_status::msg::NavigationExecution execution;
+    execution.stamp = status.stamp;
+    execution.goal = goal_;
+    execution.path_stamp = path_stamp_;
+    execution.execution_id = execution_id_;
+    execution.state = status.state;
+    execution.held = rule_replan_pending_;
+    execution.detail = detail_;
+    execution.result_json = result_json_;
+    execution_pub_->publish(execution);
   }
 
+  std::map<std::int64_t, nav_status::msg::NavigationExecution> pending_planners_;
+  bool have_goal_{false};
+  geometry_msgs::msg::PoseStamped goal_;
+  builtin_interfaces::msg::Time path_stamp_;
+  nav_status::msg::ControllerFeedback feedback_;
+  std::string execution_id_, result_json_;
+  rclcpp::Publisher<nav_status::msg::NavigationExecution>::SharedPtr execution_pub_;
+  rclcpp::Subscription<nav_status::msg::NavigationExecution>::SharedPtr planner_sub_;
+  rclcpp::Subscription<nav_status::msg::ControllerFeedback>::SharedPtr feedback_sub_;
   State state_;
   std::string detail_;
 
+  std::optional<rclcpp::Time> planner_stamp_;
   std::optional<double> actual_speed_;
   std::optional<rclcpp::Time> odom_stamp_;
   std::optional<rclcpp::Time> arrival_candidate_since_;
@@ -303,20 +384,14 @@ private:
   bool rule_replan_pending_{false};
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
-  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr plan_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planning_status_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr arrival_sub_;
   rclcpp::Publisher<NavigationStatus>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr evaluation_timer_;
   rclcpp::TimerBase::SharedPtr heartbeat_timer_;
 
   std::string goal_topic_;
-  std::string plan_topic_;
   std::string odom_topic_;
   std::string status_topic_;
-  std::string planning_status_topic_;
-  std::string arrival_topic_;
 
   double stopped_speed_threshold_ = 0.05;
   double arrival_hold_time_ = 0.80;

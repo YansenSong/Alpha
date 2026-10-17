@@ -1,11 +1,8 @@
 nav_status_node:
   ros__parameters:
     goal_topic: "/goal_pose"
-    plan_topic: "/plan_path"
     odom_topic: "/odom_wheel"
     status_topic: "/navigation/state"
-    planning_status_topic: "/global_plan/status"
-    arrival_topic: "/neupan/arrived"
 
     stopped_speed_threshold: 0.05
     arrival_hold_time: 0.80

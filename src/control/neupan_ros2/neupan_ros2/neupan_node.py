@@ -27,6 +27,7 @@ import tf2_ros
 
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Path
+from nav_status.msg import ControllerFeedback
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 
@@ -56,7 +57,7 @@ class NeupanCore(Node):
 
         # Thread lock protecting shared state: robot_state, obstacle_points, stop, arrive
         # These are accessed by both control thread (run) and callback thread (scan/path/goal)
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()
 
         # Callback groups for multi-threaded execution
         # Control group: MutuallyExclusive for timer (run) - ensures run() executes alone
@@ -284,6 +285,8 @@ class NeupanCore(Node):
             self.get_parameter("arrival_topic").get_parameter_value().string_value,
             10
         )
+        self.execution_path_stamp = None
+        self.feedback_pub = self.create_publisher(ControllerFeedback, "/neupan/controller_feedback", 10)
         self.path_install_pub = self.create_publisher(
             String, "/neupan/path_install_status", 10)
 
@@ -378,6 +381,7 @@ class NeupanCore(Node):
             # Lock only for writing shared state
             with self._state_lock:
                 self.robot_state = new_state
+                self.robot_state_stamp = trans.header.stamp
 
             self.get_logger().info(
                 f"Robot state initialized - x: {new_state[0,0]:.2f}m, "
@@ -461,17 +465,22 @@ class NeupanCore(Node):
                 if self.obstacle_points is not None else None
             )
 
+            observed_stamp = self.robot_state_stamp
+            execution_stamp = self.execution_path_stamp
             # Check for obstacles
             has_obstacles = obstacle_points_copy is not None
 
-        # Step 2: Execute planning OUTSIDE lock (10-50ms)
-        # (allows other threads to access shared state)
-        action, info = self.neupan_planner(
-            robot_state_copy, obstacle_points_copy
-        )
-
-        # Step 3: Write back results inside lock (< 0.1 μs)
+        # Serialize planner mutation with path installation. Otherwise an old
+        # computation could observe a new path but carry the previous identity.
         with self._state_lock:
+            if execution_stamp != self.execution_path_stamp:
+                return None, None
+            action, info = self.neupan_planner(robot_state_copy, obstacle_points_copy)
+            info = dict(info)
+            info["execution_path_stamp"] = execution_stamp
+            info["observed_state"] = robot_state_copy
+            info["observed_stamp"] = observed_stamp
+            info["position_tolerance"] = float(self.neupan_planner.ipath.arrive_threshold)
             self.stop = info["stop"]
             self.arrive = info["arrive"]
 
@@ -509,6 +518,8 @@ class NeupanCore(Node):
             info: Planning info dictionary
 
         """
+        if info.get("execution_path_stamp") != self.execution_path_stamp:
+            return
         # Publish path messages (info is local, thread-safe)
         self.plan_pub.publish(self.generate_path_msg(info["opt_state_list"]))
         self.ref_state_pub.publish(self.generate_path_msg(info["ref_state_list"]))
@@ -517,6 +528,19 @@ class NeupanCore(Node):
         vel_msg = self.generate_twist_msg(action, info["stop"], info["arrive"])
         self.vel_pub.publish(vel_msg)
         self.arrival_pub.publish(Bool(data=bool(info["arrive"])))
+        if info.get("execution_path_stamp") is not None:
+            feedback = ControllerFeedback()
+            feedback.stamp = self.get_clock().now().to_msg()
+            feedback.path_stamp = info["execution_path_stamp"]
+            feedback.arrived = bool(info["arrive"])
+            feedback.observed_pose.header.frame_id = self.map_frame
+            feedback.observed_pose.header.stamp = info["observed_stamp"]
+            observed = info["observed_state"]
+            feedback.observed_pose.pose.position.x = float(observed[0, 0])
+            feedback.observed_pose.pose.position.y = float(observed[1, 0])
+            feedback.observed_pose.pose.orientation = yaw_to_quat(float(observed[2, 0]))
+            feedback.position_tolerance = info["position_tolerance"]
+            self.feedback_pub.publish(feedback)
 
         # Visualization (delegated to visualization manager)
         self.viz_manager.publish_visualization(
@@ -539,8 +563,10 @@ class NeupanCore(Node):
         # Step 3: Execute planning (locks internally for planning execution)
         action, info = self._execute_planning()
 
-        # Step 4: Publish results (locks internally for marker generation)
-        self._publish_planning_results(action, info)
+        # Step 4: Publish a coherent result for the still-installed path.
+        if info is not None:
+            with self._state_lock:
+                self._publish_planning_results(action, info)
 
     def scan_callback(self, scan_msg: LaserScan) -> Optional[npt.NDArray]:
         """Process laser scan data and update obstacle points in map frame.
@@ -688,6 +714,7 @@ class NeupanCore(Node):
         with self._state_lock:
             if (self.neupan_planner.initial_path is None
                     or self.refresh_initial_path):
+                self.execution_path_stamp = path.header.stamp
                 self.neupan_planner.set_initial_path(initial_point_list)
                 # A completed path leaves both the core and wrapper in an
                 # arrived state.  A new Smac path is a new tracking task, so

@@ -77,6 +77,11 @@ AckermannSmacBridge::AckermannSmacBridge(const rclcpp::NodeOptions & options)
   auto status_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
   planning_status_pub_ = create_publisher<std_msgs::msg::String>(
     planning_status_topic_, status_qos);
+  execution_status_pub_ = create_publisher<nav_status::msg::NavigationExecution>(
+    "/navigation/planner_state", status_qos);
+  navigation_result_sub_ = create_subscription<nav_status::msg::NavigationExecution>(
+    "/navigation/execution_state", status_qos,
+    std::bind(&AckermannSmacBridge::onNavigationResult, this, std::placeholders::_1));
   rules_hold_pub_ = create_publisher<std_msgs::msg::Bool>("/navigation/rules_hold", qos);
   rules_status_pub_ = create_publisher<std_msgs::msg::String>("/navigation/rules_status", qos);
   rules_sub_ = create_subscription<std_msgs::msg::String>("/area_rules/state", status_qos,
@@ -116,10 +121,12 @@ void AckermannSmacBridge::onGoal(
     return;
   }
 
+  requested_goal_ = *msg;
   try {
     saved_goal_ = transformGoal(*msg);
     have_goal_ = true;
     map_requires_new_goal_ = false;
+    navigation_failed_ = false;
     active_path_.poses.clear();
     path_installed_ = false;
     rules_hold_ = true;
@@ -278,6 +285,9 @@ void AckermannSmacBridge::onResult(
   // Preserve Smac's complete path, including orientation at Reeds-Shepp
   // reverse segments. The bridge deliberately does not recompute yaw.
   active_path_ = wrapped_result.result->path;
+  // A unique installation identity, even if two paths finish on one clock tick.
+  last_path_identity_ns_ = std::max(now().nanoseconds(), last_path_identity_ns_ + 1);
+  active_path_.header.stamp = rclcpp::Time(last_path_identity_ns_, RCL_ROS_TIME);
   plan_path_pub_->publish(active_path_);
   // Only paths requested through /goal_pose are sent to the controller.
   // Preview requests use the same planner action but never enter this bridge.
@@ -294,11 +304,46 @@ void AckermannSmacBridge::onResult(
     static_cast<double>(wrapped_result.result->planning_time.nanosec) * 1e-9);
 }
 
+void AckermannSmacBridge::onNavigationResult(
+  const nav_status::msg::NavigationExecution::SharedPtr msg)
+{
+  // Consume the authority's terminal result. Do not replan an already finished
+  // goal when a later area-rule update invalidates its old path.
+  if (msg->state != msg->ARRIVED && msg->state != msg->FAILED) {return;}
+  GoalHandle::SharedPtr pending;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!have_goal_ || msg->goal != requested_goal_ ||
+      (msg->state == msg->ARRIVED && msg->path_stamp != active_path_.header.stamp)) {return;}
+    ++goal_generation_;
+    navigation_failed_ = msg->state == msg->FAILED;
+    have_goal_ = false;
+    planning_ = false;
+    waiting_install_ = false;
+    path_installed_ = false;
+    pending = active_goal_handle_;
+    active_goal_handle_.reset();
+    active_path_.poses.clear();
+  }
+  if (pending) {(void)action_client_->async_cancel_goal(pending);}
+}
+
 void AckermannSmacBridge::publishPlanningStatus(const std::string & status)
 {
   std_msgs::msg::String message;
   message.data = status;
   planning_status_pub_->publish(message);
+  nav_status::msg::NavigationExecution execution;
+  execution.stamp = now();
+  execution.goal = requested_goal_;
+  execution.path_stamp = active_path_.header.stamp;
+  execution.execution_id = std::to_string(requested_goal_.header.stamp.sec) + ":" +
+    std::to_string(requested_goal_.header.stamp.nanosec);
+  execution.state = status == "succeeded" ? execution.MOVING :
+    (status.rfind("failed:", 0) == 0 ? execution.FAILED : execution.PLANNING);
+  execution.held = status == "rule_replan_pending";
+  execution.detail = status;
+  execution_status_pub_->publish(execution);
 }
 
 void AckermannSmacBridge::onRules(const std_msgs::msg::String::SharedPtr msg)
@@ -460,7 +505,7 @@ void AckermannSmacBridge::checkRules()
 {
   const bool applied = costmapApplied();
   const bool blocked = have_goal_ && !active_path_.poses.empty() && pathBlocked(active_path_);
-  if (!applied || map_requires_new_goal_ || blocked || planning_ || waiting_install_ ||
+  if (!applied || navigation_failed_ || map_requires_new_goal_ || blocked || planning_ || waiting_install_ ||
     (have_goal_ && !path_installed_)) {
     rules_hold_ = true;
   } else {
@@ -471,7 +516,7 @@ void AckermannSmacBridge::checkRules()
     !planning_ && !waiting_install_ && now() >= next_replan_at_) {
     planToSavedGoal();
   }
-  const std::string reason = !have_rules_ || !rules_ready_ ? "WAITING_RULES" :
+  const std::string reason = navigation_failed_ ? "NAVIGATION_FAILED" : !have_rules_ || !rules_ready_ ? "WAITING_RULES" :
     !applied ? "WAITING_COSTMAP" : planning_ ? "REPLANNING" :
     waiting_install_ ? "PATH_INSTALL" : blocked ? "PATH_BLOCKED" :
     map_requires_new_goal_ ? "MAP_CHANGED" :

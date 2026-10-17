@@ -165,7 +165,7 @@ function AgentWorkspace({ robotId }) {
                 ? "正在处理你的请求"
                 : agent.status === "interrupted"
                 ? "上次运行已中断，可以继续对话"
-                : "项目能力查询 · Mock 工具"}
+                : "ROS 环境查询 · 机器人任务"}
             </p>
           </div>
           <div role="status">
@@ -201,7 +201,7 @@ function AgentWorkspace({ robotId }) {
                 </div>
                 <h3 className="mb-3 text-xl font-semibold">从了解项目开始</h3>
                 <p className="text-sm leading-7 text-themeTextGray">
-                  查询项目能力、查看工具执行过程，并在多轮对话中继续探索。当前没有连接真实机器人。
+                  查询项目能力、查看工具执行过程，并在多轮对话中继续探索。机器人状态以工具返回的实际反馈为准。
                 </p>
                 {!agent.sessionId ? (
                   <button
@@ -357,7 +357,7 @@ export default function AgentPage() {
       <SectionHeader
         eyebrow="Project intelligence"
         title="RoboAgent"
-        action={<StatusBadge status="info" label="Mock 模式" />}
+        action={<StatusBadge status="info" label="ROS2 Agent" />}
       />
       {enabled ? (
         <AgentWorkspace key={robotId} robotId={robotId} />

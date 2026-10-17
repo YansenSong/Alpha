@@ -2,6 +2,8 @@
 
 当前交付：SDK 验证、独立 WebSocket Gateway 和 RobotPilot `/agent` 聊天页面（本机开发模式）。
 
+ROS MCP、仿真业务工具与机器人任务验证已在此基础上扩展，安装和运行以 [机器人执行集成文档](agent-robot-execution.md) 为准。下文 Mock 验证记录属于最初 Web 集成阶段；当前 Gateway 默认加载项目 MCP，需先安装 alpha-mcp 依赖。
+
 ## 安装与验证
 
 要求 Node.js >=22.19.0。Gateway 单独固定依赖

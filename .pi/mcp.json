@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "ros_inspect": {
+      "command": "bash",
+      "args": [
+        "scripts/run_alpha_mcp.sh",
+        "ros_inspect"
+      ],
+      "cwd": ".",
+      "timeout": 20,
+      "description": "Read-only ROS graph discovery through a write-denying relay",
+      "exposure": "hidden",
+      "toolExposure": {
+        "get_nodes": "direct",
+        "get_node_details": "direct",
+        "get_topics": "direct",
+        "get_topic_type": "direct",
+        "get_services": "direct",
+        "get_actions": "direct",
+        "get_action_status": "direct",
+        "subscribe_once": "direct"
+      }
+    },
+    "alpha": {
+      "command": "bash",
+      "args": [
+        "scripts/run_alpha_mcp.sh",
+        "alpha"
+      ],
+      "cwd": ".",
+      "timeout": 20,
+      "description": "Robot business commands through the existing MissionManager; accepted never means arrival",
+      "exposure": "hidden",
+      "toolExposure": {
+        "get_robot_status": "direct",
+        "list_navigation_locations": "direct",
+        "navigate_to_location": "direct",
+        "get_task_status": "direct",
+        "request_software_stop": "direct",
+        "cancel_navigation": "direct"
+      }
+    }
+  }
+}

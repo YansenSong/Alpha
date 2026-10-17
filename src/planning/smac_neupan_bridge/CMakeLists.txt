@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nav_status REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -28,6 +29,7 @@ ament_target_dependencies(smac_neupan_bridge
   geometry_msgs
   nav2_msgs
   nav_msgs
+  nav_status
   rclcpp
   rclcpp_action
   std_msgs

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createProjectSession, projectRoot, allowedTools } from "./pi-host.mjs";
+import { createProjectSession, disposeProjectSession, projectRoot, allowedTools } from "./pi-host.mjs";
 
 const live = process.argv.includes("--live");
 const trustProject = process.argv.includes("--trust-project");
@@ -9,13 +9,13 @@ try {
   session = host.session;
   console.log(`PASS project resources: ${projectRoot}`);
   console.log(`PASS tool allowlist: ${allowedTools.join(", ")}`);
-  const tool = host.resourceLoader.getExtensions().extensions[0].tools.get("get_alpha_info");
+  const tool = host.resourceLoader.getExtensions().extensions.find(extension => extension.tools.has("get_alpha_info")).tools.get("get_alpha_info");
   assert.ok(tool, "Project tool must be registered");
   const result = await tool.definition.execute("verify-offline", {}, new AbortController().signal, () => {}, {});
   const info = JSON.parse(result.content[0].text);
-  assert.equal(info.mode, "mock");
+  assert.equal(info.mode, "project-info");
   assert.equal(info.liveRobotConnected, false);
-  console.log("PASS static mock tool execution");
+  console.log("PASS static project-info tool execution");
   if (live) {
     console.log(`Model: ${session.model.provider}/${session.model.id}`);
     let deltas = 0;
@@ -38,7 +38,7 @@ try {
     });
     const timeout = setTimeout(() => { failure = "Live verification timed out"; void session.abort(); }, 90000);
     try {
-      await session.prompt("请调用 get_alpha_info 工具，然后用一句中文说明项目支持哪些能力，并明确当前是 Mock 模式。");
+      await session.prompt("请调用 get_alpha_info 工具，然后用一句中文说明项目支持哪些能力，并说明项目信息是静态信息，实时机器人状态需要查询 MCP 工具。");
       assert.ifError(failure);
       assert.ok(deltas > 0, "Must receive streamed text");
       assert.ok(toolEnds > 0, "Model must execute get_alpha_info");
@@ -67,5 +67,5 @@ try {
   console.error(`FAIL ${error.message}`);
   process.exitCode = 1;
 } finally {
-  session?.dispose();
+  await disposeProjectSession(session);
 }

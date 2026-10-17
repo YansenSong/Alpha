@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import tempfile
@@ -8,7 +9,11 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from nav_status.msg import NavigationStatus
+from nav_status.msg import NavigationExecution as NavigationStatus
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+from navigation_test_fixture import navigation_message
 from std_msgs.msg import String
 
 from mission_manager.node import MissionManager
@@ -38,6 +43,18 @@ class MissionNodeTest(unittest.TestCase):
             "available": True, "low_battery": False, "charging": False,
             "source": "sim", "simulation": True,
         })))
+
+    @staticmethod
+    def mapped_arrival(node, odometry):
+        message = copy.deepcopy(odometry)
+        message.header.frame_id = "map"
+        message.header.stamp = node.get_clock().now().to_msg()
+        target = node._navigation_target()
+        message.pose.pose.position.x = target["x"]
+        message.pose.pose.position.y = target["y"]
+        message.pose.pose.orientation.z = target["z"]
+        message.pose.pose.orientation.w = target["w"]
+        node.on_odom(message)
 
     @staticmethod
     def current_map(node, map_id="grid-1", map_version_id="grid-1"):
@@ -290,7 +307,7 @@ class MissionNodeTest(unittest.TestCase):
                     "pose": {"x": 1, "y": 2, "z": 0, "w": 1}}]}})))
                 node.on_command(String(data=json.dumps({"command": "start", "mission_id": "m"})))
                 self.assertEqual(node.run["status"], "RUNNING")
-                status = NavigationStatus()
+                status = navigation_message(node)
                 status.stamp.sec = node.goal_sent_ns // 1000000000
                 status.stamp.nanosec = node.goal_sent_ns % 1000000000
                 status.state = NavigationStatus.ARRIVED
@@ -305,11 +322,11 @@ class MissionNodeTest(unittest.TestCase):
                 stable = Odometry()
                 stable.header.frame_id = "odom"
                 stable.pose.pose.orientation.w = 1.0
-                node.on_odom(stable)
+                self.mapped_arrival(node, stable)
                 node.on_ekf_odom(stable)
                 node.tick()
                 time.sleep(0.51)
-                node.on_odom(stable)
+                self.mapped_arrival(node, stable)
                 node.on_ekf_odom(stable)
                 node.tick()
                 self.assertEqual(node.run["status"], "SUCCEEDED")
@@ -364,7 +381,7 @@ class MissionNodeTest(unittest.TestCase):
                 node.on_command(String(data=json.dumps({"command": "start", "mission_id": "inspect"})))
                 self.assertEqual(node.run["status"], "RUNNING")
                 self.assertEqual(node.action_request_pub.messages, [])
-                nav = NavigationStatus()
+                nav = navigation_message(node)
                 nav.stamp.sec = node.goal_sent_ns // 1000000000
                 nav.stamp.nanosec = node.goal_sent_ns % 1000000000
                 nav.state = NavigationStatus.PLANNING
@@ -372,12 +389,11 @@ class MissionNodeTest(unittest.TestCase):
                 node.on_nav(nav)
                 nav.state = NavigationStatus.ARRIVED
                 node.on_nav(nav)
-                node.on_odom(stable)
+                self.mapped_arrival(node, stable)
                 node.on_ekf_odom(stable)
-                node.tick()
                 self.assertEqual(node.action_request_pub.messages, [])
                 time.sleep(0.51)
-                node.on_odom(stable)
+                self.mapped_arrival(node, stable)
                 node.on_ekf_odom(stable)
                 node.tick()
                 self.assertEqual(len(node.action_request_pub.messages), 1)
@@ -442,7 +458,7 @@ class MissionNodeTest(unittest.TestCase):
                             "id": "sequence", "name": "Sequence", "map_id": "grid-1",
                             "map_version_id": "grid-1", "steps": steps}})))
                         node.on_command(String(data=json.dumps({"command": "start", "mission_id": "sequence"})))
-                        nav = NavigationStatus()
+                        nav = navigation_message(node)
                         nav.stamp.sec = node.goal_sent_ns // 1000000000
                         nav.stamp.nanosec = node.goal_sent_ns % 1000000000
                         nav.state = NavigationStatus.PLANNING
@@ -450,16 +466,12 @@ class MissionNodeTest(unittest.TestCase):
                         node.on_nav(nav)
                         nav.state = NavigationStatus.ARRIVED
                         node.on_nav(nav)
-                        node.on_odom(stable)
-                        node.on_ekf_odom(stable)
-                        node.tick()
-                        time.sleep(0.51)
-                        node.on_odom(stable)
+                        self.mapped_arrival(node, stable)
                         node.on_ekf_odom(stable)
                         node.tick()
                         self.assertEqual(node.run["arrival_step_index"], 0)
                         for kind in kinds:
-                            node.on_odom(stable)
+                            self.mapped_arrival(node, stable)
                             node.on_ekf_odom(stable)
                             if kind == "wait":
                                 self.assertEqual(node._kind(), "wait")

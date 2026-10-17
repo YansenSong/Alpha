@@ -11,7 +11,7 @@
 
 /goal_pose -> smac_neupan_bridge -> Smac planner
                                       ├── /plan -> NeuPAN
-                                      └── /plan_path -> nav_status_node
+                                      └── /navigation/planner_state -> nav_status_node
 
 /scan + /plan -> NeuPAN
 NeuPAN -> /neupan_cmd_vel_raw -> neupan_ackermann_adapter
@@ -27,7 +27,7 @@ NeuPAN -> /neupan_cmd_vel_raw -> neupan_ackermann_adapter
 | `/goal_pose` | `geometry_msgs/msg/PoseStamped` | 输入 | `header.frame_id=map`；`pose.position` 为目标位置，`pose.orientation` 为目标朝向 |
 | `/map` | `nav_msgs/msg/OccupancyGrid` | 输出 | 2D 栅格地图；`info.resolution` 为分辨率，`data[]` 为栅格占用值 |
 | `/plan` | `nav_msgs/msg/Path` | 输出/输入 | Smac 全局路径；`header.frame_id=map`，`poses[]` 为路径点序列 |
-| `/plan_path` | `nav_msgs/msg/Path` | 输出 | `smac_neupan_bridge` 发布的兼容路径，供 `nav_status_node` 和 RViz 使用 |
+| `/plan_path` | `nav_msgs/msg/Path` | 输出 | `smac_neupan_bridge` 发布的兼容路径，供 RViz 使用 |
 | `/global_path_remaining_distance` | `std_msgs/msg/Float64` | 输出 | `data` 为沿全局路径到目标点的剩余距离，单位为 m |
 | `/scan` | `sensor_msgs/msg/LaserScan` | 输入 | `header.frame_id=laser_link`；`ranges[]` 为激光距离，单位为 m |
 | `/neupan_plan` | `nav_msgs/msg/Path` | 输出 | NeuPAN 优化后的局部轨迹 |
@@ -37,8 +37,11 @@ NeuPAN -> /neupan_cmd_vel_raw -> neupan_ackermann_adapter
 | `/neupan_cmd_vel` | `geometry_msgs/msg/Twist` | 输出 | `linear.x=v`；`angular.z=ω`，已由轴距和转角换算为车体偏航角速度 |
 | `/stop` | `std_msgs/msg/Bool` | 输入 | `data=true` 覆盖速度命令并停车；`false` 解除覆盖 |
 | `/navigation/state` | `nav_status/msg/NavigationStatus` | 输出 | `stamp`、`state`、`detail`；状态值见下表 |
+| `/navigation/execution_state` | `nav_status/msg/NavigationExecution` | 输出 | nav_status 发布的权威导航结果，携带目标、路径标识和终态证据 |
+| `/navigation/planner_state` | `nav_status/msg/NavigationExecution` | 内部 | 规划桥发布的带目标/路径标识的规划及安装状态 |
+| `/neupan/controller_feedback` | `nav_status/msg/ControllerFeedback` | 内部 | NeuPAN 发布的带路径标识、定位观测时间和控制器到达标志的反馈 |
 | `/global_plan/status` | `std_msgs/msg/String` | 内部 | Smac bridge 发布 `planning`、`succeeded` 或带原因的 `failed:` 状态 |
-| `/neupan/arrived` | `std_msgs/msg/Bool` | 内部 | NeuPAN 的到达判定，供 `nav_status_node` 使用 |
+| `/neupan/arrived` | `std_msgs/msg/Bool` | 内部 | NeuPAN 的兼容到达信号，不参与权威结果判定 |
 | `/ackermann_steering_controller/reference` | `geometry_msgs/msg/TwistStamped` | 输出 | `header.stamp`、`header.frame_id=base_link`；`twist.linear.x=v`，`twist.angular.z=ω` |
 
 `NavigationStatus.msg` 格式：

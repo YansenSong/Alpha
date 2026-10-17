@@ -8,7 +8,11 @@ import unittest
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from nav_status.msg import NavigationStatus
+from nav_status.msg import NavigationExecution as NavigationStatus
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+from navigation_test_fixture import navigation_message
 from std_msgs.msg import String
 
 from inspection_adapter.node import InspectionAdapter
@@ -60,7 +64,7 @@ class MissionFixtureFlowTest(unittest.TestCase):
                          "detector_types": ["fire_smoke"], "asset_ids": [], "timeout_ms": 3000},
                     ]}})))
                 mission.on_command(String(data=json.dumps({"command": "start", "mission_id": "fixture-mission"})))
-                status = NavigationStatus()
+                status = navigation_message(mission)
                 status.stamp.sec = mission.goal_sent_ns // 1_000_000_000
                 status.stamp.nanosec = mission.goal_sent_ns % 1_000_000_000
                 status.state = NavigationStatus.PLANNING

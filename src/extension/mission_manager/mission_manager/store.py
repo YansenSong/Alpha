@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 
 ACTIVE_STATUSES = ("RUNNING", "PAUSED")
-MISSION_SCHEMA_VERSION = 5
+MISSION_SCHEMA_VERSION = 6
 
 
 def utc_now():
@@ -62,6 +62,10 @@ class MissionStore:
                 reason TEXT NOT NULL,
                 hold_active INTEGER NOT NULL DEFAULT 0,
                 origin_request_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS navigation_evidence (
+                task_id TEXT NOT NULL, step_index INTEGER NOT NULL, attempt INTEGER NOT NULL,
+                evidence_json TEXT NOT NULL, PRIMARY KEY(task_id, step_index, attempt)
             );
             CREATE TABLE IF NOT EXISTS run_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,12 +195,13 @@ class MissionStore:
         item["steps"] = json.loads(item.pop("steps_json"))
         return item
 
-    @staticmethod
-    def _run(row):
+    def _run(self, row):
         if row is None:
             return None
         item = dict(row)
         item["steps"] = json.loads(item.pop("steps_json"))
+        item["navigation_evidence"] = [json.loads(entry[0]) for entry in self.db.execute(
+            "SELECT evidence_json FROM navigation_evidence WHERE task_id=? ORDER BY step_index, attempt", (item["task_id"],))]
         return item
 
     def missions(self):
@@ -228,6 +233,11 @@ class MissionStore:
         with self.db:
             cursor = self.db.execute("DELETE FROM missions WHERE id = ?", (mission_id,))
         return cursor.rowcount > 0
+
+    def record_navigation_evidence(self, evidence):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO navigation_evidence VALUES (?,?,?,?)", (
+                evidence["task_id"], evidence["step_index"], evidence["attempt"], json.dumps(evidence)))
 
     def new_run(self, task_id, mission, origin_request_id=None, robot_pose=None,
                 record_start_event=False):

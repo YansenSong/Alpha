@@ -8,6 +8,7 @@
   <license>GPL-3.0</license>
 
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_status</exec_depend>
 
 
   <test_depend>ament_copyright</test_depend>
