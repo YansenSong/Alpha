@@ -28,7 +28,7 @@ const NAV_GROUPS = [
   {
     zh: "工作台",
     en: "Workspace",
-    paths: ["/", "/route", "/agent", "/maps", "/scheduler"],
+    paths: ["/", "/agent", "/route", "/maps", "/scheduler"],
   },
   {
     zh: "监控与记录",

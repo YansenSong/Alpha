@@ -45,7 +45,10 @@ def validate_rule(raw):
     name = raw.get("name", "")
     if not isinstance(name, str) or len(name) > 100:
         raise ValueError("name must be at most 100 characters")
-    rule = {"id": rule_id, "name": name.strip(), "type": raw["type"]}
+    enabled = raw.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    rule = {"id": rule_id, "name": name.strip(), "type": raw["type"], "enabled": enabled}
     fields = ("x1", "y1", "x2", "y2", "width") if rule["type"] == "wall" else ("cx", "cy", "w", "h")
     for field in fields:
         rule[field] = finite(raw.get(field), field)
@@ -75,8 +78,12 @@ def validate_rule(raw):
     return rule
 
 
-def active(rule, now=None):
+def unexpired(rule, now=None):
     return rule["type"] != "closure" or expiry(rule["expires_at"]) > (now or datetime.now(timezone.utc))
+
+
+def active(rule, now=None):
+    return rule.get("enabled", True) and unexpired(rule, now)
 
 
 def map_key(grid):
@@ -176,7 +183,7 @@ class RuleStore:
     def state(self, key):
         self._refresh()
         saved = self.maps.get(key, {"version": 0, "rules": []})
-        return {"version": saved["version"], "rules": [r for r in saved["rules"] if active(r)]}
+        return {"version": saved["version"], "rules": [r for r in saved["rules"] if unexpired(r)]}
 
     def mutate(self, key, version, action, raw):
         if not isinstance(version, int) or isinstance(version, bool):
@@ -188,6 +195,13 @@ class RuleStore:
         if action == "upsert":
             rule = validate_rule(raw)
             rules = [old for old in rules if old["id"] != rule["id"]] + [rule]
+        elif action == "set_enabled":
+            if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):
+                raise ValueError("enabled must be a boolean")
+            if not any(rule["id"] == raw.get("id") for rule in rules):
+                raise ValueError("rule not found")
+            rules = [{**rule, "enabled": raw["enabled"]} if rule["id"] == raw["id"] else rule
+                     for rule in rules]
         elif action == "delete":
             rule_id = raw.get("id") if isinstance(raw, dict) else None
             if not any(rule["id"] == rule_id for rule in rules):

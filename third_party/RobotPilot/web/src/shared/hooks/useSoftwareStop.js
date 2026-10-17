@@ -62,12 +62,24 @@ const createRequestId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `software-stop-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+// Unknown motion must never hide the stop action. Disable it only when
+// fresh telemetry confirms idle and there is no running/paused task.
+export const softwareStopNeeded = (run, motion, now = Date.now()) =>
+  Boolean(
+    ["running", "paused"].includes(run?.status) ||
+      !motion || now - motion.receivedAt > 1500 ||
+      !motion.stationary || motion.stationarySince == null ||
+      now - motion.stationarySince < 500
+  );
+
 const useSoftwareStop = () => {
   const ros = useRos();
   const rosStatus = useRosStatus();
   const { mode, identity, robotId = "robot-001" } = useContext(AuthContext);
   const missionRun = useMissionRun();
   const [robotState, setRobotState] = useState(null);
+  const [motion, setMotion] = useState(null);
+  const motionRef = useRef(null);
   const [requestState, setRequestState] = useState(null);
   const [, setFreshnessTick] = useState(0);
   const requestTopicRef = useRef(null);
@@ -76,12 +88,61 @@ const useSoftwareStop = () => {
   const previousMissionReasonRef = useRef(missionRun?.reason || "");
   const acknowledgementTimerRef = useRef(null);
   const capabilities = softwareStopCapabilities(mode, identity);
-  const canRequestStop = capabilities.requestStop;
+  const stopUnavailableReason = !capabilities.requestStop
+    ? "Operator permission required"
+    : rosStatus !== "connected" ? "ROS bridge offline"
+    : robotState?.active ? "Software stop already active"
+    : requestState?.status === "pending" ? "Software stop request pending"
+    : !softwareStopNeeded(missionRun, motion) ? "No active task and robot is stationary"
+    : "";
+  const canRequestStop = !stopUnavailableReason;
   const canReleaseStop = capabilities.releaseStop;
   const stateFresh = isSoftwareStopStateFresh(robotState);
   const canResumePausedTask = Boolean(
     missionRun?.status === "paused" && missionRun?.taskId,
   );
+
+  useEffect(() => {
+    if (!ros || rosStatus !== "connected" || !window.ROSLIB) {
+      motionRef.current = null;
+      setMotion(null);
+      return undefined;
+    }
+    const topic = new window.ROSLIB.Topic({
+      ros, name: AppConfig.ROBOT_VELOCITY_TOPIC,
+      messageType: "nav_msgs/Odometry", throttle_rate: 200,
+    });
+    const observe = (message) => {
+      const twist = message.twist?.twist;
+      const values = ["linear", "angular"].flatMap(kind =>
+        ["x", "y", "z"].map(axis => twist?.[kind]?.[axis]));
+      if (!values.every(Number.isFinite)) {
+        motionRef.current = null;
+        setMotion(null);
+        return;
+      }
+      const now = Date.now();
+      const stationary = Math.hypot(...values.slice(0, 3)) <= 0.01 &&
+        Math.hypot(...values.slice(3)) <= 0.01;
+      const previous = motionRef.current;
+      const next = { receivedAt: now, stationary,
+        stationarySince: stationary
+          ? previous?.stationary && now - previous.receivedAt <= 1000
+            ? previous.stationarySince : now
+          : null };
+      motionRef.current = next;
+      setMotion(next);
+    };
+    topic.subscribe(observe);
+    return () => topic.unsubscribe(observe);
+  }, [ros, rosStatus]);
+
+  useEffect(() => {
+    if (!motion) return undefined;
+    const timer = window.setTimeout(() => setFreshnessTick(value => value + 1),
+      Math.max(1, 1501 - (Date.now() - motion.receivedAt)));
+    return () => window.clearTimeout(timer);
+  }, [motion]);
 
   const resumeTask = useCallback(
     (taskId, requestId) => {
@@ -273,6 +334,7 @@ const useSoftwareStop = () => {
     stateFresh,
     requestState,
     canRequestStop,
+    stopUnavailableReason,
     canReleaseStop,
     canResumePausedTask,
     requestStop,

@@ -115,9 +115,6 @@ function AgentWorkspace({ robotId }) {
                 onClick={() => agent.selectSession(session.id)}
               >
                 <span className="block truncate text-sm">{session.label}</span>
-                <span className="mt-1 block font-mono text-xs text-themeTextGray">
-                  {session.id.slice(0, 8)}
-                </span>
               </button>
               <button
                 type="button"
@@ -154,12 +151,7 @@ function AgentWorkspace({ robotId }) {
       <DashboardCard className="agent-chat" aria-label="RoboAgent">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-borderSubtle/20 px-4 py-3">
           <div>
-            <h2 className="text-sm font-semibold">
-              Pi Agent{" "}
-              <span className="ml-2 font-normal text-themeTextGray">
-                / {agent.sessionId?.slice(0, 8) || "尚未选择会话"}
-              </span>
-            </h2>
+            <h2 className="text-sm font-semibold">Pi Agent</h2>
             <p className="mt-1 text-xs text-themeTextGray">
               {running
                 ? "正在处理你的请求"

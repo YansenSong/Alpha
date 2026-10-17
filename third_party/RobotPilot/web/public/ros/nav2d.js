@@ -21,6 +21,8 @@ window.NAV2D.scanShape = null;
 window.NAV2D.robotTrailShape = null;
 window.NAV2D.robotTrail = [];
 window.NAV2D.keepoutItems = [];
+window.NAV2D.areaRuleLabels = [];
+window.NAV2D.areaRuleTextScale = null;
 window.NAV2D.queuedWaypointItems = [];
 window.NAV2D.queuedWaypointLabels = [];
 window.NAV2D.savedWaypointItems = [];
@@ -218,6 +220,7 @@ window.NAV2D.InitMap = (ros) => {
         window.NAV2D.canvas.scaleToDimensions(grid.width, grid.height);
         window.NAV2D.canvas.shift(origin.x, origin.y);
         window.NAV2D.mapViewGeometry = geometry;
+        window.NAV2D.areaRuleTextScale = null;
         // A newly fitted map establishes the robot marker's reference size.
         if (window.NAV2D.robotMarker) {
           window.NAV2D.robotMarker.mapScale = null;
@@ -371,7 +374,20 @@ const scaleMarkerWithMap = (marker, scene) => {
   marker.scaleY = referenceScale.y;
 };
 
+// Preserve the fitted-map text scale, rather than cancelling each zoom.
+// Keep it across rule snapshots so a redraw cannot reset the text size.
+const scaleAreaRuleLabel = (label, scene) => {
+  if (!label || !scene) return;
+  const reference = window.NAV2D.areaRuleTextScale || {
+    x: 1 / (scene.scaleX || 1), y: 1 / (scene.scaleY || 1),
+  };
+  window.NAV2D.areaRuleTextScale = reference;
+  label.scaleX = reference.x;
+  label.scaleY = reference.y;
+};
+
 const updateNavigationOverlayScale = (scene = getScene()) => {
+  (window.NAV2D.areaRuleLabels || []).forEach(label => scaleAreaRuleLabel(label, scene));
   scaleMarkerWithMap(window.NAV2D.goalMarkerItem, scene);
   (window.NAV2D.queuedWaypointItems || []).forEach((marker) => {
     scaleMarkerWithMap(marker, scene);
@@ -474,6 +490,7 @@ window.NAV2D.setAreaRules = (rules) => {
   window.NAV2D.areaRules = rules || [];
   const scene = getScene();
   if (!scene) return;
+  if (window.NAV2D.areaRuleScene !== scene) window.NAV2D.areaRuleTextScale = null;
   window.NAV2D.areaRuleScene = scene;
 
   (window.NAV2D.keepoutItems || []).forEach((shape) => {
@@ -487,12 +504,15 @@ window.NAV2D.setAreaRules = (rules) => {
   const colors = {
     keepout: ["rgba(239,68,68,0.22)", "rgba(239,68,68,0.9)"],
     closure: ["rgba(249,115,22,0.26)", "rgba(249,115,22,0.95)"],
-    speed: ["rgba(234,179,8,0.20)", "rgba(234,179,8,0.95)"],
+    speed: ["rgba(59,130,246,0.20)", "rgba(59,130,246,0.95)"],
     wall: ["rgba(168,85,247,0.35)", "rgba(168,85,247,0.95)"],
   };
-  window.NAV2D.keepoutItems = window.NAV2D.areaRules.map((z) => {
+  window.NAV2D.areaRuleLabels = [];
+  window.NAV2D.keepoutItems = window.NAV2D.areaRules.flatMap((z) => {
     const shape = new window.createjs.Shape();
-    const [fill, stroke] = colors[z.type] || colors.keepout;
+    const [fill, stroke] = z.enabled === false
+      ? ["rgba(148,163,184,0.12)", "#94a3b8"]
+      : colors[z.type] || colors.keepout;
     if (z.type === "wall") {
       shape.graphics.beginStroke(stroke).setStrokeStyle(Math.max(0.04, z.width))
         .moveTo(z.x1, -z.y1).lineTo(z.x2, -z.y2);
@@ -504,7 +524,24 @@ window.NAV2D.setAreaRules = (rules) => {
     }
     shape.visible = window.NAV2D.layerState?.zones !== false;
     scene.addChild(shape);
-    return shape;
+    const names = { keepout: "禁行区", speed: "限速区", wall: "虚拟墙", closure: "临时封闭区" };
+    const textColors = { keepout: "#b91c1c", speed: "#1d4ed8", wall: "#7e22ce", closure: "#c2410c" };
+    const label = new window.createjs.Text(
+      `${names[z.type] || "区域规则"}${z.enabled === false ? "（已禁用）" : ""}`,
+      "bold 12px Microsoft YaHei, sans-serif",
+      z.enabled === false ? "#64748b" : textColors[z.type] || textColors.keepout,
+    );
+    label.x = z.type === "wall" ? (z.x1 + z.x2) / 2 : z.cx;
+    label.y = z.type === "wall" ? -(z.y1 + z.y2) / 2 : -z.cy;
+    label.textAlign = "center";
+    label.textBaseline = "middle";
+    label.mouseEnabled = false;
+    label.shadow = new window.createjs.Shadow("rgba(255,255,255,0.95)", 0, 0, 4);
+    scaleAreaRuleLabel(label, scene);
+    label.visible = shape.visible;
+    scene.addChild(label);
+    window.NAV2D.areaRuleLabels.push(label);
+    return [shape, label];
   });
 
   bringNavigationOverlaysToFront(scene);

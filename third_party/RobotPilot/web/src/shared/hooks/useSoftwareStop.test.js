@@ -4,12 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   canStartMission,
+  softwareStopNeeded,
   isSoftwareStopStateFresh,
   parseSoftwareStopState,
   softwareStopCapabilities,
 } from "./useSoftwareStop";
 import { AuthContext, RosContext, RosStatusContext } from "../../app/App";
 import useSoftwareStop from "./useSoftwareStop";
+import { setRun } from "../missions/missionClient";
 
 class FakeTopic {
   static instances = [];
@@ -42,6 +44,49 @@ const wrapper = ({ children }) =>
   );
 
 describe("software stop state contract", () => {
+  it("disables stop only for a confirmed idle robot without an active task", () => {
+    const idle = { receivedAt: 2000, stationary: true, stationarySince: 1000 };
+    for (const status of ["cancelled", "succeeded", "failed", undefined]) {
+      expect(softwareStopNeeded({ status }, idle, 2100)).toBe(false);
+    }
+    for (const status of ["running", "paused"]) {
+      expect(softwareStopNeeded({ status }, idle, 2100)).toBe(true);
+    }
+    expect(softwareStopNeeded(null, { ...idle, stationary: false }, 2100)).toBe(true);
+    expect(softwareStopNeeded(null, idle, 3501)).toBe(true);
+    expect(softwareStopNeeded(null, null, 2100)).toBe(true);
+  });
+
+  it("guards the actual click after cancellation, and keeps manual-motion stop available", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    window.ROSLIB = { Topic: FakeTopic, Message: class { constructor(value) { Object.assign(this, value); } } };
+    FakeTopic.instances = [];
+    setRun({ taskId: "cancelled-task", status: "cancelled" });
+    const { result, unmount } = renderHook(() => useSoftwareStop(), { wrapper });
+    const odom = FakeTopic.instances.find(topic => topic.name === "/odometry/filtered");
+    const stopped = { twist: { twist: {
+      linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 },
+    } } };
+    act(() => odom.callback(stopped));
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    act(() => odom.callback(stopped));
+    expect(result.current.canRequestStop).toBe(false);
+    expect(result.current.stopUnavailableReason).toBe("No active task and robot is stationary");
+    expect(result.current.requestStop()).toBeNull();
+    act(() => odom.callback({ twist: { twist: {
+      ...stopped.twist.twist, angular: { x: 0, y: 0, z: .2 },
+    } } }));
+    expect(result.current.canRequestStop).toBe(true);
+    act(() => odom.callback(stopped));
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    act(() => odom.callback(stopped));
+    expect(result.current.canRequestStop).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1501));
+    expect(result.current.canRequestStop).toBe(true);
+    unmount();
+  });
+
   it("expires robot state at the freshness deadline", () => {
     const state = { receivedAt: 1000 };
     expect(isSoftwareStopStateFresh(state, 4000)).toBe(true);
@@ -187,6 +232,7 @@ describe("software stop state contract", () => {
 
 afterEach(() => {
   cleanup();
+  setRun(null);
   vi.useRealTimers();
   delete window.ROSLIB;
 });

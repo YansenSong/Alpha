@@ -1,3 +1,4 @@
+import { areaRuleColors } from "../shared/robot/areaRuleColors";
 import React, {
   useCallback,
   useContext,
@@ -204,16 +205,24 @@ export default function SavedMapRulesEditor({ selection }) {
   const ruleShape = (rule, key, previewing = false, index = -1) => {
     if (!map) return null;
     const zoom = map.width / (viewport?.width || map.width);
+    const colors = areaRuleColors(rule);
     const style = {
-      fill: previewing ? "#3b82f680" : "#ef444455",
-      stroke: previewing ? "#3b82f6" : "#ef4444",
+      fill: colors.fill,
+      stroke: colors.stroke,
       strokeWidth: 2 / zoom,
     };
     const label = (x, y) => !previewing && (
       <g pointerEvents="none">
-        <circle cx={x} cy={y} r={11 / zoom} fill="#b91c1c" stroke="white" strokeWidth={2 / zoom} />
-        <text x={x} y={y} dy="0.35em" textAnchor="middle" fill="white" fontSize={11 / zoom} fontWeight="700">{index + 1}</text>
+        <circle cx={x} cy={y} r={11} fill={colors.badge} stroke="white" strokeWidth={2 / zoom} />
+        <text x={x} y={y} dy="0.35em" textAnchor="middle" fill="white" fontSize={11} fontWeight="700">{index + 1}</text>
       </g>
+    );
+    const typeName = `${LABELS[rule.type] || "区域规则"}${rule.enabled === false ? "（已禁用）" : ""}`;
+    const typeLabel = (x, y, availableWidth = Infinity, availableHeight = Infinity) => (
+      <text x={x} y={y} dy="0.35em" textAnchor="middle" pointerEvents="none"
+        fill={colors.badge} stroke="white" strokeWidth={3 / zoom} paintOrder="stroke"
+        fontSize={Math.min(13, availableWidth * .85 / typeName.length, availableHeight * .4)}
+        fontWeight="700">{typeName}</text>
     );
     if (rule.type === "wall") {
       const a = toPixel(rule.x1, rule.y1);
@@ -222,6 +231,7 @@ export default function SavedMapRulesEditor({ selection }) {
         <g key={key}>
           <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={style.stroke} strokeWidth={Math.max(3 / zoom, rule.width / map.resolution)} opacity="0.7" />
           {label((a.x + b.x) / 2, (a.y + b.y) / 2)}
+          {typeLabel((a.x + b.x) / 2, (a.y + b.y) / 2 + 23)}
         </g>
       );
     }
@@ -230,7 +240,9 @@ export default function SavedMapRulesEditor({ selection }) {
     return (
       <g key={key}>
         <rect x={Math.min(a.x, b.x)} y={Math.min(a.y, b.y)} width={Math.abs(b.x - a.x)} height={Math.abs(b.y - a.y)} {...style} />
-        {label((a.x + b.x) / 2, (a.y + b.y) / 2)}
+        {label(Math.min(a.x, b.x) + Math.min(15, Math.abs(b.x - a.x) / 4),
+          Math.min(a.y, b.y) + Math.min(15, Math.abs(b.y - a.y) / 4))}
+        {typeLabel((a.x + b.x) / 2, (a.y + b.y) / 2, Math.abs(b.x - a.x), Math.abs(b.y - a.y))}
       </g>
     );
   };
@@ -493,6 +505,7 @@ export default function SavedMapRulesEditor({ selection }) {
                 mapKey={map.map_key}
                 upsertRule={(rule) => mutate("upsert", rule)}
                 deleteRule={(id) => mutate("delete", { id })}
+                setRuleEnabled={(id, enabled) => mutate("set_enabled", { id, enabled })}
                 canEdit={!busy}
               />
             </div>
@@ -507,8 +520,8 @@ export default function SavedMapRulesEditor({ selection }) {
           </p>
         )}
         {state && (
-          <details className="rounded-xl border border-borderSubtle p-3">
-            <summary className="cursor-pointer text-sm font-medium">
+          <details className="rounded-xl border border-borderSubtle bg-bgSurface/50 p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-textWhiteHover">
               规则管理 · {state.rules.length} 条
             </summary>
             <div className="mt-3">
@@ -519,6 +532,7 @@ export default function SavedMapRulesEditor({ selection }) {
                 mapKey={map.map_key}
                 upsertRule={(rule) => mutate("upsert", rule)}
                 deleteRule={(id) => mutate("delete", { id })}
+                setRuleEnabled={(id, enabled) => mutate("set_enabled", { id, enabled })}
                 canEdit={!busy}
               />
             </div>

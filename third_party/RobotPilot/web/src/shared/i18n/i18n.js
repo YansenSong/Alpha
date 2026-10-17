@@ -190,6 +190,12 @@ const ZH = {
   "Software stop request pending": "软件停车请求中",
   "Software stop state unknown": "软件停车状态未知",
   "Resume navigation": "恢复导航",
+  "Release software stop": "解除软件停车",
+  "No active task and robot is stationary": "当前无活动任务，车辆已静止",
+  "Software stop already active": "软件停车已生效",
+  "Cancel task": "取消任务",
+  "Waiting for cancellation": "等待取消确认",
+  "Cancel the current task without releasing software stop": "取消当前任务，保持软件停车",
   "Resume navigation and continue the current task": "恢复导航并继续当前任务",
   "Cannot send navigation goal while software stop state is unknown or active":
     "软件停车状态未知或已生效，无法发送导航目标",
@@ -411,7 +417,7 @@ const ZH = {
   "These zones are visual markers only. They do not stop the robot. Confirm obstacle avoidance with the integrator.":
     "这些区域只是视觉标记，不能自行阻止机器人运动。请向集成方确认避障能力。",
   "Rectangular no-go areas are drawn on the map. Toggle them with the Zones layer.":
-    "矩形禁行区域绘制在地图上，可通过“禁行区域”图层切换显示。",
+    "矩形禁行区域绘制在地图上，可通过“区域规则”图层切换显示。",
   "Browser notifications enabled": "浏览器通知已启用",
   "Notification permission was not granted": "未获得浏览器通知权限",
   "Settings saved": "设置已保存",
@@ -429,7 +435,8 @@ const ZH = {
   Path: "路径",
   Goal: "目标",
   Waypoints: "航点",
-  Zones: "禁行区域",
+  Zones: "区域规则",
+  "Area rules": "区域规则",
   Trail: "轨迹",
   Reset: "重置",
   Camera: "相机",
@@ -604,7 +611,7 @@ const ZH = {
   "Route execution is controlled by MissionManager.":
     "路线由 MissionManager 统一执行和追踪。",
   "Another task is already active.": "已有任务正在运行。",
-  "A task is paused. Use Resume navigation to continue it.": "当前任务已暂停，请点击“恢复导航”继续执行。",
+  "A task is paused. Use Resume navigation to continue it.": "当前任务已暂停，可恢复导航或取消任务。",
   Mon: "周一",
   Tue: "周二",
   Wed: "周三",
@@ -814,7 +821,7 @@ const ZH = {
   "Drag with the left mouse button to pan; scroll or pinch to zoom.":
     "按住鼠标左键拖动可平移地图；滚动滚轮或双指捏合可缩放。",
   "Layer toggles above the map control what's drawn — laser scan, planned path, saved waypoints, zones, and the robot's trail.":
-    "地图上方的图层开关控制激光扫描、规划路径、已存航点、禁行区域和机器人轨迹的显示。",
+    "地图上方的图层开关控制激光扫描、规划路径、已存航点、区域规则和机器人轨迹的显示。",
   "Goal Mode / Set Pose / Add Waypoint / Go Home change what a click on the map does, or send it straight to the origin.":
     "发送目标、设置位姿和添加航点会改变点击地图时的操作；返回原点会直接发送目标。",
   "Right-click the map for a quick menu — send a goal, save a waypoint, or set the initial pose — without switching modes first.":
@@ -876,7 +883,7 @@ const ZH = {
   "Shows whether this browser is connected to the robot.":
     "显示此浏览器是否已连接机器人。",
   "Toggle what's drawn on the map — laser scan, planned path, saved waypoints, zones, and the robot's trail — and adjust opacity.":
-    "切换激光扫描、规划路径、航点、禁行区域和轨迹等图层，并调整透明度。",
+    "切换激光扫描、规划路径、航点、区域规则和轨迹等图层，并调整透明度。",
   "Drag to pan, scroll or pinch to zoom. Right-click anywhere for a quick menu — send a goal, save a waypoint, or set the initial pose.":
     "拖动平移、滚动或双指缩放地图。右键点击可发送目标、保存航点或设置初始位姿。",
   "Switch what a click on the map does: send a navigation goal, set the robot's initial pose, or drop a saved waypoint — or jump straight home.":

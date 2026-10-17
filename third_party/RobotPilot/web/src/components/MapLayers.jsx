@@ -23,7 +23,7 @@ const TOGGLES = [
   ["path", "Path"],
   ["goal", "Goal"],
   ["waypoints", "Waypoints"],
-  ["zones", "Zones"],
+  ["zones", "Area rules"],
   ["robotTrail", "Trail"],
 ];
 

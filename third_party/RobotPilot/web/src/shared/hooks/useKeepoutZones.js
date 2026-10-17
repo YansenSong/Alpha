@@ -300,6 +300,7 @@ export default function useKeepoutZones() {
     canEdit: editAccess.allowed,
     permissionReason: editAccess.reason,
     upsertRule: (rule) => send("upsert", rule),
+    setRuleEnabled: (id, enabled) => send("set_enabled", { id, enabled }),
     deleteRule: (id) => send("delete", { id }),
   };
 }

@@ -5,6 +5,7 @@ import { addEvent } from "../shared/events/eventLog";
 import { useT } from "../shared/i18n/i18n";
 import { INSPECTION_PROFILE } from "../shared/robot/robotContract";
 import SoftwareStopActionButton from "./SoftwareStopActionButton";
+import CancelTaskButton from "./CancelTaskButton";
 import useSoftwareStop from "../shared/hooks/useSoftwareStop";
 import useBatteryState from "../shared/hooks/useBatteryState";
 
@@ -75,7 +76,7 @@ const StatusBar = () => {
     : t("Software Stop (not physical E-STOP)");
 
   return (
-    <div className="sticky top-0 z-40 flex items-center gap-4 border-b border-borderSubtle bg-bgCard/90 px-3 py-1.5 font-[RobotoMono] backdrop-blur sm:px-4">
+    <div className="sticky top-0 z-40 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-borderSubtle bg-bgCard/90 px-3 py-1.5 font-[RobotoMono] backdrop-blur sm:px-4">
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 rounded-full ${conn.dot} ${
@@ -152,7 +153,7 @@ const StatusBar = () => {
         </div>
       </div>
 
-      <div className="ml-auto flex items-center gap-2" aria-live="polite">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-2" aria-live="polite">
         <span
           className={`text-[10px] ${
             stopActive ? "font-bold text-statusRed" : "text-themeTextGray"
@@ -174,7 +175,7 @@ const StatusBar = () => {
           title={
             INSPECTION_PROFILE
               ? "Software Stop unavailable: robot interface not configured. Not the physical E-STOP."
-              : "Software stop requires Operator. It is not the physical E-STOP."
+              : t(softwareStop.stopUnavailableReason || "Software Stop (not physical E-STOP)")
           }
         >
           {t("Software Stop")}
@@ -186,10 +187,13 @@ const StatusBar = () => {
             disabled={
               !softwareStop.canReleaseStop || stopStatus === "pending"
             }
-            title={t("Resume navigation and continue the current task")}
+            title={t(softwareStop.canResumePausedTask ? "Resume navigation and continue the current task" : "Release software stop")}
           >
-            {t("Resume navigation")}
+            {t(softwareStop.canResumePausedTask ? "Resume navigation" : "Release software stop")}
           </SoftwareStopActionButton>
+        )}
+        {showResumeNavigation && (
+          <CancelTaskButton disabled={stopStatus === "pending"} />
         )}
       </div>
     </div>

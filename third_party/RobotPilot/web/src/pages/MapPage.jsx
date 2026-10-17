@@ -21,6 +21,7 @@ import Map from "../components/Map";
 import Camera from "../components/Camera";
 import Joystick from "../components/Joystick";
 import SoftwareStopActionButton from "../components/SoftwareStopActionButton";
+import CancelTaskButton from "../components/CancelTaskButton";
 import RobotState from "../components/RobotState";
 import { MetricCard } from "../shared/ui/Dashboard";
 import NavStatus from "../components/NavStatus";
@@ -761,35 +762,40 @@ const MapPage = () => {
                 {manualDisabledReason}
               </p>
             )}
-            <SoftwareStopActionButton
-              active={resumeNavigationAvailable}
-              onClick={
-                resumeNavigationAvailable
-                  ? softwareStop.requestRelease
-                  : requestSoftwareStop
-              }
-              disabled={
-                INSPECTION_PROFILE ||
-                (resumeNavigationAvailable
-                  ? !softwareStop.canReleaseStop ||
-                    softwareStop.requestState?.status === "pending"
-                  : !softwareStop.canRequestStop ||
-                    softwareStop.requestState?.status === "pending")
-              }
-              title={
-                INSPECTION_PROFILE
-                  ? "Software Stop unavailable: robot interface not configured; not physical E-STOP"
+            <div className="flex items-start justify-center gap-2">
+              <SoftwareStopActionButton
+                active={resumeNavigationAvailable}
+                onClick={
+                  resumeNavigationAvailable
+                    ? softwareStop.requestRelease
+                    : requestSoftwareStop
+                }
+                disabled={
+                  INSPECTION_PROFILE ||
+                  (resumeNavigationAvailable
+                    ? !softwareStop.canReleaseStop ||
+                      softwareStop.requestState?.status === "pending"
+                    : !softwareStop.canRequestStop ||
+                      softwareStop.requestState?.status === "pending")
+                }
+                title={
+                  INSPECTION_PROFILE
+                    ? "Software Stop unavailable: robot interface not configured; not physical E-STOP"
+                    : resumeNavigationAvailable
+                    ? t(softwareStop.canResumePausedTask ? "Resume navigation and continue the current task" : "Release software stop")
+                    : t(softwareStop.stopUnavailableReason || "Software Stop (not physical E-STOP)")
+                }
+              >
+                {INSPECTION_PROFILE
+                  ? t("Software Stop")
                   : resumeNavigationAvailable
-                  ? t("Resume navigation and continue the current task")
-                  : "Software stop request; not physical E-STOP"
-              }
-            >
-              {INSPECTION_PROFILE
-                ? t("Software Stop")
-                : resumeNavigationAvailable
-                ? t("Resume navigation")
-                : "STOP"}
-            </SoftwareStopActionButton>
+                  ? t(softwareStop.canResumePausedTask ? "Resume navigation" : "Release software stop")
+                  : "STOP"}
+              </SoftwareStopActionButton>
+              {!INSPECTION_PROFILE && resumeNavigationAvailable && (
+                <CancelTaskButton disabled={softwareStop.requestState?.status === "pending"} />
+              )}
+            </div>
           </div>
 
           <div className="min-w-0 sm:col-span-2 lg:col-span-5 [&>div]:h-full">
@@ -903,6 +909,7 @@ const MapPage = () => {
                 </button>
               </div>
 
+              {mode && (
               <p className="min-h-5 px-1 font-[RobotoMono] text-xs leading-5 text-themeTextGray">
                 {mode === "goal" &&
                   t(
@@ -916,8 +923,8 @@ const MapPage = () => {
                   t(
                     "Each click adds a waypoint. Drag to set heading. Execute all below.",
                   )}
-                {!mode && t("Select a mode above to interact with the map.")}
               </p>
+              )}
             </div>
           </section>
         )}

@@ -17,7 +17,7 @@ from rclpy.time import Time
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from .rules import BLOCKING_TYPES, ROBOT_RADIUS, RuleStore, covers, map_key, occupancy_map_id, rasterize, yaw_of
+from .rules import BLOCKING_TYPES, ROBOT_RADIUS, RuleStore, active, covers, map_key, occupancy_map_id, rasterize, yaw_of
 
 
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -238,6 +238,7 @@ class AreaRules(Node):
             self.publish_state()
 
     def publish_control(self):
+        active_rules = [rule for rule in self.rules if active(rule)]
         control = {"ready": False, "stop": True, "speed_limit": None, "map_key": self.key}
         if self.navigation_applied() and self.actual_speed is not None and (
             self.odom_received_at is not None and time.monotonic() - self.odom_received_at <= 0.5
@@ -265,10 +266,10 @@ class AreaRules(Node):
                           for offset in (i * 0.1 for i in range(int(horizon / 0.1) + 2))]
                 stop = any(covers(rule, x, y, ROBOT_RADIUS)
                            and distance <= speed * reaction + speed * speed / (2.0 * decel) + 0.2
-                           for rule in self.rules if rule["type"] in BLOCKING_TYPES
+                           for rule in active_rules if rule["type"] in BLOCKING_TYPES
                            for distance, x, y in points)
                 limits = []
-                for rule in self.rules:
+                for rule in active_rules:
                     if rule["type"] != "speed":
                         continue
                     first = next((distance for distance, x, y in points
@@ -280,7 +281,7 @@ class AreaRules(Node):
                                speed_limit=min(limits) if limits else None,
                                actual_speed_mps=self.actual_speed,
                                configured_speed_limit_mps=min(
-                                   (rule["limit_mps"] for rule in self.rules if rule["type"] == "speed"
+                                   (rule["limit_mps"] for rule in active_rules if rule["type"] == "speed"
                                     and covers(rule, position.x, position.y, ROBOT_RADIUS)),
                                    default=None))
             except TransformException:

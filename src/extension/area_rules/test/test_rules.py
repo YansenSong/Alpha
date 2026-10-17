@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from area_rules.rules import (RuleStore, covers, grid_to_world, map_key, occupancy_map_id,
-                                        rasterize, validate_rule)
+                                        rasterize, validate_rule, active)
 
 
 def grid(yaw=0):
@@ -54,6 +54,37 @@ class RuleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration"):
             validate_rule({"id": "bad", "type": "closure", "cx": 1, "cy": 2,
                            "w": 1, "h": 1, "duration_seconds": 0})
+
+    def test_disabled_rules_remain_stored_but_do_not_block_and_can_be_reenabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rules.json"
+            store = RuleStore(path)
+            rule = {"id": "gate", "type": "keepout", "cx": 0, "cy": 0, "w": 1, "h": 1}
+            enabled = store.mutate("m", 0, "upsert", rule)["rules"][0]
+            self.assertTrue(enabled["enabled"])
+            self.assertIn(100, rasterize(grid().info, [enabled], padding=0))
+            disabled = store.mutate("m", 1, "set_enabled", {"id": "gate", "enabled": False})["rules"][0]
+            self.assertFalse(active(disabled))
+            self.assertNotIn(100, rasterize(grid().info, [disabled], padding=0))
+            self.assertEqual(RuleStore(path).state("m")["rules"], [disabled])
+            self.assertFalse(store.expire("m"))
+            with self.assertRaisesRegex(ValueError, "rules changed"):
+                store.mutate("m", 1, "set_enabled", {"id": "gate", "enabled": True})
+            restored = store.mutate("m", 2, "set_enabled", {"id": "gate", "enabled": True})["rules"][0]
+            self.assertEqual(restored, enabled)
+
+    def test_toggle_preserves_closure_expiry_and_validates_boolean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RuleStore(Path(directory) / "rules.json")
+            rule = {"id": "closure", "type": "closure", "cx": 0, "cy": 0, "w": 1, "h": 1, "duration_seconds": 60}
+            saved = store.mutate("m", 0, "upsert", rule)["rules"][0]
+            for version, enabled in [(1, False), (2, True)]:
+                result = store.mutate("m", version, "set_enabled", {"id": "closure", "enabled": enabled})
+                self.assertEqual(result["rules"][0]["expires_at"], saved["expires_at"])
+            with self.assertRaisesRegex(ValueError, "boolean"):
+                store.mutate("m", 3, "set_enabled", {"id": "closure", "enabled": "false"})
+            with self.assertRaisesRegex(ValueError, "boolean"):
+                validate_rule({**rule, "enabled": 0})
 
     def test_invalid_limits_do_not_enter_store(self):
         with self.assertRaisesRegex(ValueError, "speed limit"):

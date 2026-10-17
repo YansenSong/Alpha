@@ -1,3 +1,4 @@
+import { areaRuleColors } from "../shared/robot/areaRuleColors";
 import React, { useState } from "react";
 
 import useKeepoutZones from "../shared/hooks/useKeepoutZones";
@@ -53,10 +54,23 @@ export const KeepoutZonesEditor = ({
   error,
   upsertRule,
   deleteRule,
+  setRuleEnabled,
+  application,
   canEdit = false,
   permissionReason,
   section = "all",
 }) => {
+  const [changingId, setChangingId] = useState(null);
+  const [toggleError, setToggleError] = useState("");
+  const controlsBusy = changingId !== null || application === "PENDING";
+  const toggleRule = async (rule) => {
+    if (controlsBusy || !ready || !canEdit || !setRuleEnabled) return;
+    setChangingId(rule.id);
+    setToggleError("");
+    try { await setRuleEnabled(rule.id, rule.enabled === false); }
+    catch (cause) { setToggleError(cause.message || "规则状态更新失败"); }
+    finally { setChangingId(null); }
+  };
   const [form, setForm] = useState(EMPTY);
   const [preview, setPreview] = useState(null);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
@@ -259,34 +273,49 @@ export const KeepoutZonesEditor = ({
             {rules.map((rule, index) => (
               <article
                 key={rule.id}
-                className="rounded-lg border border-borderSubtle bg-bgCard/50 p-3"
+                className={`rounded-lg border border-borderSubtle p-3 ${rule.enabled === false ? "bg-bgSurface/30" : "bg-bgCard/50"}`}
               >
                 <div className="flex min-w-0 items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <span className="mr-2 inline-flex min-h-7 min-w-7 items-center justify-center rounded-full bg-statusRed text-xs font-bold text-white">
+                    <span className="mr-2 inline-flex min-h-7 min-w-7 items-center justify-center rounded-full text-xs font-bold text-white"
+                      style={{ backgroundColor: areaRuleColors(rule).badge }}>
                       {index + 1}
                     </span>
-                    <span className="inline-flex rounded-md bg-themeBlue/10 px-2 py-1 text-xs font-semibold text-themeBlue">
+                    <span className="inline-flex rounded-md px-2 py-1 text-xs font-semibold text-white"
+                      style={{ backgroundColor: areaRuleColors(rule).badge }}>
                       {LABELS[rule.type] || rule.type}
                     </span>
                     <p
                       className="mt-2 truncate text-sm font-medium text-textWhiteHover"
-                      title={rule.name || rule.id}
+                      title={rule.name || "未命名规则"}
                     >
-                      {rule.name ||
-                        `未命名规则 · ${String(rule.id).slice(0, 8)}`}
+                      {rule.name || "未命名规则"}
                     </p>
                   </div>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleRule(rule)}
+                      disabled={!ready || !canEdit || controlsBusy || !setRuleEnabled}
+                      aria-label={`${rule.enabled === false ? "启用" : "禁用"} ${rule.name || "未命名规则"}`}
+                      className="workspace-action min-h-11 px-3 disabled:opacity-40"
+                    >
+                      {changingId === rule.id ? "保存中…" : rule.enabled === false ? "启用" : "禁用"}
+                    </button>
                   <button
                     onClick={() => setDeleteCandidate(rule)}
-                    disabled={!ready || !canEdit}
-                    aria-label={`删除 ${rule.name || rule.id}`}
+                    disabled={!ready || !canEdit || controlsBusy}
+                    aria-label={`删除 ${rule.name || "未命名规则"}`}
                     className="workspace-action min-h-11 shrink-0 border-statusRed/40 px-3 text-statusRed disabled:opacity-40"
                   >
                     删除
                   </button>
+                  </div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-themeTextGray">
+                  <span className={rule.enabled === false ? "text-themeTextGray" : "text-statusGreen"}>
+                    {rule.enabled === false ? "已禁用" : "已启用"}
+                  </span>
                   <span>
                     {rule.type === "speed"
                       ? `最高 ${formatMeters(rule.limit_mps)} m/s`
@@ -306,6 +335,7 @@ export const KeepoutZonesEditor = ({
         )}
       </section>}
 
+      {showRules && toggleError && <p role="alert" className="text-xs text-statusRed">{toggleError}</p>}
       {showRules && deleteCandidate && (
         <div
           role="alertdialog"
@@ -314,8 +344,7 @@ export const KeepoutZonesEditor = ({
         >
           <p className="text-sm font-medium text-textWhiteHover">
             删除“
-            {deleteCandidate.name ||
-              `未命名规则 · ${String(deleteCandidate.id).slice(0, 8)}`}
+            {deleteCandidate.name || "未命名规则"}
             ”？
           </p>
           <p className="mt-1 text-xs text-themeTextGray">
@@ -372,7 +401,7 @@ export const KeepoutZonesEditor = ({
                 })
               }
             >
-              导入 {old.name || old.id}
+              导入 {old.name || "未命名规则"}
             </button>
           ))}
         </div>

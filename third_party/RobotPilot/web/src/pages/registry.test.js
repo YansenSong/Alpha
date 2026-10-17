@@ -11,8 +11,8 @@ test("inspection profile omits the standalone missions page", async () => {
   const { PAGE_REGISTRY, NAV_REGISTRY } = await import("./registry");
   expect(PAGE_REGISTRY.map(({ path }) => path)).toEqual([
     "/",
-    "/route",
     "/agent",
+    "/route",
     "/maps",
     "/info",
     "/health",

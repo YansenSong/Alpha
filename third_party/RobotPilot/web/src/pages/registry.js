@@ -21,13 +21,13 @@ const AssetsPage = lazy(() => import("./AssetsPage"));
  */
 export const PAGE_REGISTRY = [
   { path: "/", label: "Cockpit", icon: "map", component: MapPage },
+  { path: "/agent", label: "RoboAgent", icon: "agent", component: AgentPage },
   {
     path: "/route",
     label: "巡检任务规划",
     icon: "route",
     component: RoutePage,
   },
-  { path: "/agent", label: "RoboAgent", icon: "agent", component: AgentPage },
   { path: "/maps", label: "Maps", icon: "maps", component: MapsPage },
   { path: "/info", label: "Status", icon: "status", component: InfoPage },
   { path: "/health", label: "Health", icon: "health", component: HealthPage },

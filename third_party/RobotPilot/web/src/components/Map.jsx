@@ -1,3 +1,4 @@
+import { areaRuleColors } from "../shared/robot/areaRuleColors";
 import { T, useT } from "../shared/i18n/i18n";
 import React, {
   useCallback,
@@ -451,12 +452,7 @@ const Map = forwardRef(
             .setStrokeStyle(Math.max(0.04, areaWallWidth))
             .moveTo(start.x, -start.y).lineTo(point.x, -point.y);
         } else {
-          const colors = {
-            keepout: ["rgba(239,68,68,0.20)", "#ef4444"],
-            speed: ["rgba(234,179,8,0.20)", "#eab308"],
-            closure: ["rgba(249,115,22,0.24)", "#f97316"],
-          };
-          const [fill, stroke] = colors[areaDrawType] || colors.keepout;
+          const { fill, stroke } = areaRuleColors({ type: areaDrawType });
           graphics.beginFill(fill).beginStroke(stroke).setStrokeStyle(0.04)
             .drawRect(Math.min(start.x, point.x), -Math.max(start.y, point.y),
               Math.abs(point.x - start.x), Math.abs(point.y - start.y));
@@ -814,8 +810,8 @@ const Map = forwardRef(
                 <line stroke="#a855f7" strokeLinecap="round" />
               ) : (
                 <rect
-                  fill={{ keepout: "rgba(239,68,68,0.28)", speed: "rgba(234,179,8,0.26)", closure: "rgba(249,115,22,0.30)" }[areaPreview.type] || "rgba(239,68,68,0.28)"}
-                  stroke={{ keepout: "#ef4444", speed: "#eab308", closure: "#f97316" }[areaPreview.type] || "#ef4444"}
+                  fill={areaRuleColors(areaPreview).fill}
+                  stroke={areaRuleColors(areaPreview).stroke}
                   strokeWidth="2"
                 />
               )}
