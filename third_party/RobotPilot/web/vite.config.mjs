@@ -8,7 +8,10 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3000,
     strictPort: true,
-    proxy: { "/api": { target: "http://127.0.0.1:5050", changeOrigin: true } },
+    proxy: {
+      "/api": { target: "http://127.0.0.1:5050", changeOrigin: true },
+      "/agent-api": { target: "http://127.0.0.1:8769", ws: true },
+    },
   },
   build: { outDir: "build" },
   test: { environment: "jsdom", globals: true },

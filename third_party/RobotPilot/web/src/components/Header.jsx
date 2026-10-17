@@ -28,7 +28,7 @@ const NAV_GROUPS = [
   {
     zh: "工作台",
     en: "Workspace",
-    paths: ["/", "/route", "/maps", "/scheduler"],
+    paths: ["/", "/route", "/agent", "/maps", "/scheduler"],
   },
   {
     zh: "监控与记录",
@@ -60,6 +60,9 @@ const getNavGroups = () => {
 
 const NavIcon = ({ name }) => {
   const paths = {
+    agent: (
+      <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0ZM7 9h8M7 13h5" />
+    ),
     dashboard: (
       <>
         <rect x="3" y="3" width="8" height="8" rx="1.5" />

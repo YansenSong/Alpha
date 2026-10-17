@@ -1,6 +1,7 @@
 import { lazy } from "react";
 import { INSPECTION_PROFILE } from "../shared/robot/robotContract";
 
+const AgentPage = lazy(() => import("./AgentPage"));
 const MapPage = lazy(() => import("./MapPage"));
 const RoutePage = lazy(() => import("./RoutePage"));
 const InfoPage = lazy(() => import("./InfoPage"));
@@ -26,6 +27,7 @@ export const PAGE_REGISTRY = [
     icon: "route",
     component: RoutePage,
   },
+  { path: "/agent", label: "RoboAgent", icon: "agent", component: AgentPage },
   { path: "/maps", label: "Maps", icon: "maps", component: MapsPage },
   { path: "/info", label: "Status", icon: "status", component: InfoPage },
   { path: "/health", label: "Health", icon: "health", component: HealthPage },

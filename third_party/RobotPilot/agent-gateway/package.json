@@ -1,0 +1,21 @@
+{
+  "name": "robotpilot-agent-gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verify": "node src/verify.mjs",
+    "verify:live": "node src/verify.mjs --live",
+    "start": "node src/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "verify:gateway": "node src/verify-gateway.mjs",
+    "verify:web": "node src/verify-web-proxy.mjs",
+    "verify:ui": "node src/verify-ui.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "ws": "8.22.0"
+  }
+}

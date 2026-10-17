@@ -12,6 +12,7 @@ test("inspection profile omits the standalone missions page", async () => {
   expect(PAGE_REGISTRY.map(({ path }) => path)).toEqual([
     "/",
     "/route",
+    "/agent",
     "/maps",
     "/info",
     "/health",

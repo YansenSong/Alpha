@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import Header from "../components/Header";
 import Logs from "../components/Logs";
 import NotificationsWatcher from "../components/NotificationsWatcher";
@@ -13,10 +13,15 @@ import { useT } from "../shared/i18n/i18n";
 
 const AppLayout = () => {
   const { t } = useT();
+  const isAgentPage = useLocation().pathname.replace(/\/+$/, "") === "/agent";
   const [showLogs, setShowLogs] = useState(false);
 
   return (
-    <div className="app-bg flex min-h-screen flex-col text-textWhiteHover md:pl-56">
+    <div
+      className={`app-bg flex min-h-screen flex-col text-textWhiteHover md:pl-56 ${
+        isAgentPage ? "app-agent-layout" : ""
+      }`}
+    >
       <a
         href="#main-content"
         className="fixed left-4 top-4 z-[100] -translate-y-20 rounded-lg bg-themeBlue px-4 py-2 text-sm font-semibold text-white focus:translate-y-0"
@@ -30,7 +35,9 @@ const AppLayout = () => {
       <MissionClient />
       <main
         id="main-content"
-        className="mx-auto min-h-0 w-full max-w-[1600px] flex-1 px-3 pb-4 sm:px-4 lg:px-6"
+        className={`mx-auto min-h-0 w-full max-w-[1600px] flex-1 px-3 pb-4 sm:px-4 lg:px-6 ${
+          isAgentPage ? "app-agent-main" : ""
+        }`}
       >
         <ReplayModeBanner />
         <AuthModeBanner />

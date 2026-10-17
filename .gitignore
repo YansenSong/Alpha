@@ -55,3 +55,10 @@ CATKIN_IGNORE
 /src/RobotPilot/web/coverage/
 /src/RobotPilot/web/.vite/
 /src/RobotPilot/web/*.tsbuildinfo
+
+# Pi Web integration: dependencies and local runtime data
+/third_party/RobotPilot/agent-gateway/node_modules/
+/third_party/RobotPilot/agent-gateway/dist/
+/third_party/RobotPilot/agent-gateway/.runtime/
+/third_party/RobotPilot/agent-gateway/.env
+/third_party/RobotPilot/agent-gateway/.env.*
